@@ -76,6 +76,7 @@
 #include <AP_Rally/AP_Rally.h>
 
 #include <AP_OpticalFlow/AP_OpticalFlow.h>     // Optical Flow library
+#include <AP_Radar/AP_Radar.h> // iNav Radar
 #include <AP_Parachute/AP_Parachute.h>
 #include <AP_ADSB/AP_ADSB.h>
 #include <AP_ICEngine/AP_ICEngine.h>
@@ -286,6 +287,11 @@ private:
 
 #if AC_PRECLAND_ENABLED
     void precland_update(void);
+#endif
+
+#if AP_RADAR_ENABLED
+    // iNav Radar
+    AP_Radar radar;
 #endif
 
     // returns a Location for a rally point or home; if

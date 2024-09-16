@@ -133,6 +133,9 @@ const AP_Scheduler::Task Plane::scheduler_tasks[] = {
 #if HAL_BUTTON_ENABLED
     SCHED_TASK_CLASS(AP_Button, &plane.button, update, 5, 100, 150),
 #endif
+#if AP_RADAR_ENABLED
+    SCHED_TASK_CLASS(AP_Radar, &plane.radar, update,    100,    25,  152),
+#endif
 #if AP_LANDINGGEAR_ENABLED
     SCHED_TASK(landing_gear_update, 5, 50, 159),
 #endif
