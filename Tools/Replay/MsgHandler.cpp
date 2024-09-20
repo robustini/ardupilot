@@ -45,7 +45,7 @@ struct MsgHandler::format_field_info *MsgHandler::find_field_info(const char *la
             return &field_info[i];
         }
     }
-    return NULL;
+    return nullptr;
 }
 
 MsgHandler::MsgHandler(const struct log_Format &_f) : next_field(0), f(_f)
@@ -83,7 +83,6 @@ void MsgHandler::parse_format_fields()
 
     while ((next_label = strtok(arg, ",")) != NULL) {
         if (label_offset > strlen(format)) {
-            free(labels);
             printf("too few field times for labels %s (format=%s) (labels=%s)\n",
                    f.name, format, labels);
             exit(1);
@@ -108,7 +107,7 @@ void MsgHandler::parse_format_fields()
 bool MsgHandler::field_value(uint8_t *msg, const char *label, char *ret, uint8_t retlen)
 {
     struct format_field_info *info = find_field_info(label);
-    if (info == NULL) {
+    if (info == nullptr) {
       ::printf("No info for (%s)\n",label);
       exit(1);
     }
@@ -144,7 +143,7 @@ bool MsgHandler::field_value(uint8_t *msg, const char *label, Vector3f &ret)
             }
         }
         if (i == next_field) {
-            return 0; // not found
+            return false; // not found
         }
     }
 
