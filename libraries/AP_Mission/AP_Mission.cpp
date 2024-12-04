@@ -17,6 +17,7 @@
 #include <GCS_MAVLink/GCS.h>
 #include <RC_Channel/RC_Channel_config.h>
 #include <AC_Fence/AC_Fence.h>
+#include <AP_Logger/AP_Logger.h>
 
 const AP_Param::GroupInfo AP_Mission::var_info[] = {
 
@@ -400,6 +401,15 @@ bool AP_Mission::verify_command(const Mission_Command& cmd)
 
 bool AP_Mission::start_command(const Mission_Command& cmd)
 {
+#if HAL_LOGGING_ENABLED
+    if (log_start_mission_item_bit != (uint32_t)-1) {
+        auto &logger = AP::logger();
+        if (logger.should_log(log_start_mission_item_bit)) {
+            logger.Write_MISE(*this, cmd);
+        }
+    }
+#endif
+
     // check for landing related commands and set flags
     if (is_landing_type_cmd(cmd.id) || cmd.id == MAV_CMD_DO_LAND_START) {
         _flags.in_landing_sequence = true;
@@ -1241,6 +1251,7 @@ MAV_MISSION_RESULT AP_Mission::mavlink_int_to_mission_cmd(const mavlink_mission_
         break;
 
     case MAV_CMD_DO_MOUNT_CONTROL:                      // MAV ID: 205
+        // TODO: this is only valid if packet.z == MAV_MOUNT_MODE_MAVLINK_TARGETING
         cmd.content.mount_control.pitch = packet.param1;
         cmd.content.mount_control.roll = packet.param2;
         cmd.content.mount_control.yaw = packet.param3;
@@ -1757,6 +1768,7 @@ bool AP_Mission::mission_cmd_to_mavlink_int(const AP_Mission::Mission_Command& c
         packet.param1 = cmd.content.mount_control.pitch;
         packet.param2 = cmd.content.mount_control.roll;
         packet.param3 = cmd.content.mount_control.yaw;
+        packet.z = MAV_MOUNT_MODE_MAVLINK_TARGETING;
         break;
 
     case MAV_CMD_DO_SET_CAM_TRIGG_DIST:                 // MAV ID: 206
@@ -2434,15 +2446,21 @@ bool AP_Mission::jump_to_closest_mission_leg(const Location &current_loc)
     uint16_t landing_start_index = 0;
     float min_distance = -1;
 
+    // This defines the maximum number of waypoints that will be searched, this limits the worst case runtime
+    uint16_t search_remaining = 1000;
+
     // Go through mission and check each DO_RETURN_PATH_START
     for (uint16_t i = 1; i < num_commands(); i++) {
-        Mission_Command tmp;
-        if (read_cmd_from_storage(i, tmp) && (tmp.id == MAV_CMD_DO_RETURN_PATH_START)) {
+        if (get_command_id(i) == uint16_t(MAV_CMD_DO_RETURN_PATH_START)) {
             uint16_t tmp_index;
             float tmp_distance;
-            if (distance_to_mission_leg(i, tmp_distance, tmp_index, current_loc) && (min_distance < 0 || tmp_distance <= min_distance)){
+            if (distance_to_mission_leg(i, search_remaining, tmp_distance, tmp_index, current_loc) && (min_distance < 0 || tmp_distance <= min_distance)){
                 min_distance = tmp_distance;
                 landing_start_index = tmp_index;
+            }
+            if (search_remaining == 0) {
+                // Run out of time to search, stop and return the best so far
+                break;
             }
         }
     }
@@ -2614,7 +2632,7 @@ reset_do_jump_tracking:
 
 // Approximate the distance travelled to return to the mission path. DO_JUMP commands are observed in look forward.
 // Stop searching once reaching a landing or do-land-start
-bool AP_Mission::distance_to_mission_leg(uint16_t start_index, float &rejoin_distance, uint16_t &rejoin_index, const Location& current_loc)
+bool AP_Mission::distance_to_mission_leg(uint16_t start_index, uint16_t &search_remaining, float &rejoin_distance, uint16_t &rejoin_index, const Location& current_loc)
 {
     Location prev_loc;
     Mission_Command temp_cmd;
@@ -2630,7 +2648,7 @@ bool AP_Mission::distance_to_mission_leg(uint16_t start_index, float &rejoin_dis
 
     // run through remainder of mission to approximate a distance to landing
     uint16_t index = start_index;
-    for (uint8_t i=0; i<UINT8_MAX; i++) {
+    for (; search_remaining > 0; search_remaining--) {
         // search until the end of the mission command list
         for (uint16_t cmd_index = index; cmd_index <= (unsigned)_cmd_total; cmd_index++) {
             if (get_next_cmd(cmd_index, temp_cmd, true, false)) {

@@ -139,6 +139,9 @@ const AP_Scheduler::Task Plane::scheduler_tasks[] = {
 #if AC_PRECLAND_ENABLED
     SCHED_TASK(precland_update, 400, 50, 160),
 #endif
+#if AP_QUICKTUNE_ENABLED
+    SCHED_TASK(update_quicktune, 40, 100, 163),
+#endif
 };
 
 void Plane::get_scheduler_tasks(const AP_Scheduler::Task *&tasks,
@@ -329,7 +332,7 @@ void Plane::one_second_loop()
     set_control_channels();
 
 #if HAL_WITH_IO_MCU
-    iomcu.setup_mixing(&rcmap, g.override_channel.get(), g.mixing_gain, g2.manual_rc_mask);
+    iomcu.setup_mixing(g.override_channel.get(), g.mixing_gain, g2.manual_rc_mask);
 #endif
 
 #if HAL_ADSB_ENABLED
@@ -346,7 +349,7 @@ void Plane::one_second_loop()
     // sync MAVLink system ID
     mavlink_system.sysid = g.sysid_this_mav;
 
-    SRV_Channels::enable_aux_servos();
+    AP::srv().enable_aux_servos();
 
     // update notify flags
     AP_Notify::flags.pre_arm_check = arming.pre_arm_checks(false);
@@ -493,10 +496,14 @@ void Plane::update_GPS_10Hz(void)
  */
 void Plane::update_control_mode(void)
 {
-    if (control_mode != &mode_auto) {
+    if ((control_mode != &mode_auto) && (control_mode != &mode_takeoff)) {
         // hold_course is only used in takeoff and landing
         steer_state.hold_course_cd = -1;
     }
+    // refresh the throttle limits, to avoid using stale values
+    // they will be updated once takeoff_calc_throttle is called
+    takeoff_state.throttle_lim_max = 100.0f;
+    takeoff_state.throttle_lim_min = -100.0f;
 
     update_fly_forward();
 
@@ -510,16 +517,21 @@ void Plane::update_fly_forward(void)
     // wing aircraft. This helps the EKF produce better state
     // estimates as it can make stronger assumptions
 #if HAL_QUADPLANE_ENABLED
-    if (quadplane.available() &&
-        quadplane.tailsitter.is_in_fw_flight()) {
-        ahrs.set_fly_forward(true);
-        return;
-    }
+    if (quadplane.available()) {
+        if (quadplane.tailsitter.is_in_fw_flight()) {
+            ahrs.set_fly_forward(true);
+            return;
+        }
 
-    if (quadplane.in_vtol_mode() ||
-        quadplane.in_assisted_flight()) {
-        ahrs.set_fly_forward(false);
-        return;
+        if (quadplane.in_vtol_mode()) {
+            ahrs.set_fly_forward(false);
+            return;
+        }
+
+        if (quadplane.in_assisted_flight()) {
+            ahrs.set_fly_forward(false);
+            return;
+        }
     }
 #endif
 
@@ -1013,6 +1025,18 @@ void Plane::precland_update(void)
 #else
     return g2.precland.update(0, false);
 #endif
+}
+#endif
+
+#if AP_QUICKTUNE_ENABLED
+/*
+  update AP_Quicktune object. We pass the supports_quicktune() method
+  in so that quicktune can detect if the user changes to a
+  non-quicktune capable mode while tuning and the gains can be reverted
+ */
+void Plane::update_quicktune(void)
+{
+    quicktune.update(control_mode->supports_quicktune());
 }
 #endif
 

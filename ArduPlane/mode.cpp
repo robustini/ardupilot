@@ -1,14 +1,15 @@
 #include "Plane.h"
 
 Mode::Mode() :
-    ahrs(plane.ahrs)
+    unused_integer{17},
 #if HAL_QUADPLANE_ENABLED
-    , quadplane(plane.quadplane),
     pos_control(plane.quadplane.pos_control),
     attitude_control(plane.quadplane.attitude_control),
     loiter_nav(plane.quadplane.loiter_nav),
-    poscontrol(plane.quadplane.poscontrol)
+    quadplane(plane.quadplane),
+    poscontrol(plane.quadplane.poscontrol),
 #endif
+    ahrs(plane.ahrs)
 {
 }
 
@@ -140,6 +141,14 @@ bool Mode::enter()
 
         // Make sure the flight stage is correct for the new mode
         plane.update_flight_stage();
+
+#if HAL_QUADPLANE_ENABLED
+        if (quadplane.enabled()) {
+            float aspeed;
+            bool have_airspeed = quadplane.ahrs.airspeed_estimate(aspeed);
+            quadplane.assisted_flight = quadplane.assist.should_assist(aspeed, have_airspeed);
+        }
+#endif
     }
 
     return enter_result;
@@ -247,6 +256,9 @@ void Mode::reset_controllers()
     // reset steering controls
     plane.steer_state.locked_course = false;
     plane.steer_state.locked_course_err = 0;
+
+    // reset TECS
+    plane.TECS_controller.reset();
 }
 
 bool Mode::is_taking_off() const

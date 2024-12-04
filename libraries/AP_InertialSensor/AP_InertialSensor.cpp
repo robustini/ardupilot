@@ -854,9 +854,11 @@ void AP_InertialSensor::_start_backends()
         _backends[i]->start();
     }
 
+#if AP_INERTIALSENSOR_ALLOW_NO_SENSORS
     if (_gyro_count == 0 || _accel_count == 0) {
         AP_HAL::panic("INS needs at least 1 gyro and 1 accel");
     }
+#endif
 
     // clear IDs for unused sensor instances
     for (uint8_t i=get_accel_count(); i<INS_MAX_INSTANCES; i++) {
@@ -949,7 +951,7 @@ AP_InertialSensor::init(uint16_t loop_rate)
     }
 
     // calibrate gyros unless gyro calibration has been disabled
-    if (gyro_calibration_timing() != GYRO_CAL_NEVER) {
+    if (gyro_calibration_timing() != GYRO_CAL_NEVER && _gyro_count > 0) {
         init_gyro();
     }
 
@@ -1324,7 +1326,9 @@ AP_InertialSensor::detect_backends(void)
         #else
         DEV_PRINTF("INS: unable to initialise driver\n");
         GCS_SEND_TEXT(MAV_SEVERITY_DEBUG, "INS: unable to initialise driver");
+        #if !AP_INERTIALSENSOR_ALLOW_NO_SENSORS
         AP_BoardConfig::config_error("INS: unable to initialise driver");
+        #endif
         #endif
     }
 }
@@ -1859,8 +1863,7 @@ void AP_InertialSensor::HarmonicNotch::update_params(uint8_t instance, bool conv
 {
     if (!is_equal(last_bandwidth_hz[instance], params.bandwidth_hz()) ||
         !is_equal(last_attenuation_dB[instance], params.attenuation_dB()) ||
-        (params.tracking_mode() == HarmonicNotchDynamicMode::Fixed &&
-         !is_equal(last_center_freq_hz[instance], params.center_freq_hz())) ||
+        !is_equal(last_center_freq_hz[instance], params.center_freq_hz()) ||
         converging) {
         filter[instance].init(gyro_rate, params);
         last_center_freq_hz[instance] = params.center_freq_hz();
@@ -2327,7 +2330,7 @@ void AP_InertialSensor::acal_update()
 */
 void AP_InertialSensor::HarmonicNotch::update_freq_hz(float scaled_freq)
 {
-    calculated_notch_freq_hz[0] = scaled_freq;
+    calculated_notch_freq_hz[0] = fabsf(scaled_freq);
     num_calculated_notch_frequencies = 1;
 }
 
@@ -2335,7 +2338,7 @@ void AP_InertialSensor::HarmonicNotch::update_freq_hz(float scaled_freq)
 void AP_InertialSensor::HarmonicNotch::update_frequencies_hz(uint8_t num_freqs, const float scaled_freq[]) {
     // note that we allow zero through, which will disable the notch
     for (uint8_t i = 0; i < num_freqs; i++) {
-        calculated_notch_freq_hz[i] = scaled_freq[i];
+        calculated_notch_freq_hz[i] = fabsf(scaled_freq[i]);
     }
     // any uncalculated frequencies will float at the previous value or the initialized freq if none
     num_calculated_notch_frequencies = num_freqs;

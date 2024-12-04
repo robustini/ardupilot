@@ -330,6 +330,10 @@ private:
     ModeThermal mode_thermal;
 #endif
 
+#if AP_QUICKTUNE_ENABLED
+    AP_Quicktune quicktune;
+#endif
+    
     // This is the state of the flight control system
     // There are multiple states defined such as MANUAL, FBW-A, AUTO
     Mode *control_mode = &mode_initializing;
@@ -446,6 +450,10 @@ private:
         uint32_t accel_event_ms;
         uint32_t start_time_ms;
         bool waiting_for_rudder_neutral;
+        float throttle_lim_max;
+        float throttle_lim_min;
+        uint32_t throttle_max_timer_ms;
+        uint32_t level_off_start_time_ms;
     } takeoff_state;
 
     // ground steering controller state
@@ -871,6 +879,10 @@ private:
     static const TerrainLookupTable Terrain_lookup[];
 #endif
 
+#if AP_QUICKTUNE_ENABLED
+    void update_quicktune(void);
+#endif
+
     // Attitude.cpp
     void adjust_nav_pitch_throttle(void);
     void update_load_factor(void);
@@ -939,7 +951,6 @@ private:
     void Log_Write_RC(void);
     void Log_Write_Vehicle_Startup_Messages();
     void Log_Write_AETR();
-    void log_init();
 #endif
 
     // Parameters.cpp
@@ -1131,11 +1142,12 @@ private:
     bool auto_takeoff_check(void);
     void takeoff_calc_roll(void);
     void takeoff_calc_pitch(void);
-    void takeoff_calc_throttle(const bool use_max_throttle=false);
+    void takeoff_calc_throttle();
     int8_t takeoff_tail_hold(void);
     int16_t get_takeoff_pitch_min_cd(void);
     void landing_gear_update(void);
     bool check_takeoff_timeout(void);
+    bool check_takeoff_timeout_level_off(void);
 
     // avoidance_adsb.cpp
     void avoidance_adsb_update(void);
@@ -1156,7 +1168,7 @@ private:
     void servos_twin_engine_mix();
     void force_flare();
     void throttle_watt_limiter(int8_t &min_throttle, int8_t &max_throttle);
-    void throttle_slew_limit(SRV_Channel::Aux_servo_function_t func);
+    void throttle_slew_limit();
     bool suppress_throttle(void);
     void update_throttle_hover();
     void channel_function_mixer(SRV_Channel::Aux_servo_function_t func1_in, SRV_Channel::Aux_servo_function_t func2_in,

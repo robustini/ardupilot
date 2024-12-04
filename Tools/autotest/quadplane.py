@@ -363,6 +363,20 @@ class AutoTestQuadPlane(vehicle_test_suite.TestSuite):
     def QAUTOTUNE(self):
         '''test Plane QAutoTune mode'''
 
+        # adjust tune so QAUTOTUNE can cope
+        self.set_parameters({
+            "Q_A_RAT_RLL_P" : 0.15,
+            "Q_A_RAT_RLL_I" : 0.25,
+            "Q_A_RAT_RLL_D" : 0.002,
+            "Q_A_RAT_PIT_P" : 0.15,
+            "Q_A_RAT_PIT_I" : 0.25,
+            "Q_A_RAT_PIT_D" : 0.002,
+            "Q_A_RAT_YAW_P" : 0.18,
+            "Q_A_RAT_YAW_I" : 0.018,
+            "Q_A_ANG_RLL_P" : 4.5,
+            "Q_A_ANG_PIT_P" : 4.5,
+            })
+
         # this is a list of all parameters modified by QAUTOTUNE.  Set
         # them so that when the context is popped we get the original
         # values back:
@@ -1411,6 +1425,81 @@ class AutoTestQuadPlane(vehicle_test_suite.TestSuite):
 
         self.wait_disarmed(timeout=120)
 
+    def VTOLQuicktune_CPP(self):
+        '''VTOL Quicktune in C++'''
+        self.set_parameters({
+            "RC7_OPTION": 181,
+            "QWIK_ENABLE" : 1,
+            "QWIK_DOUBLE_TIME" : 5, # run faster for autotest
+        })
+
+        self.context_push()
+        self.context_collect('STATUSTEXT')
+
+        # reduce roll/pitch gains by 2
+        gain_mul = 0.5
+        soften_params = ['Q_A_RAT_RLL_P', 'Q_A_RAT_RLL_I', 'Q_A_RAT_RLL_D',
+                         'Q_A_RAT_PIT_P', 'Q_A_RAT_PIT_I', 'Q_A_RAT_PIT_D',
+                         'Q_A_RAT_YAW_P', 'Q_A_RAT_YAW_I']
+
+        original_values = self.get_parameters(soften_params)
+
+        softened_values = {}
+        for p in original_values.keys():
+            softened_values[p] = original_values[p] * gain_mul
+        self.set_parameters(softened_values)
+
+        self.wait_ready_to_arm()
+        self.change_mode("QLOITER")
+        self.set_rc(7, 1000)
+        self.arm_vehicle()
+        self.takeoff(20, 'QLOITER')
+
+        # use rc switch to start tune
+        self.set_rc(7, 1500)
+
+        self.wait_text("Quicktune: starting tune", check_context=True)
+        for axis in ['Roll', 'Pitch', 'Yaw']:
+            self.wait_text("Starting %s tune" % axis, check_context=True)
+            self.wait_text("Quicktune: %s D done" % axis, check_context=True, timeout=120)
+            self.wait_text("Quicktune: %s P done" % axis, check_context=True, timeout=120)
+            self.wait_text("Quicktune: %s done" % axis, check_context=True, timeout=120)
+
+        new_values = self.get_parameters(soften_params)
+        for p in original_values.keys():
+            threshold = 0.8 * original_values[p]
+            self.progress("tuned param %s %.4f need %.4f" % (p, new_values[p], threshold))
+            if new_values[p] < threshold:
+                raise NotAchievedException(
+                    "parameter %s %.4f not increased over %.4f" %
+                    (p, new_values[p], threshold))
+
+        self.progress("ensure we are not overtuned")
+        self.set_parameter('SIM_ENGINE_MUL', 0.9)
+
+        self.delay_sim_time(5)
+
+        # and restore it
+        self.set_parameter('SIM_ENGINE_MUL', 1)
+
+        for i in range(5):
+            self.wait_heartbeat()
+
+        if self.statustext_in_collections("ABORTING"):
+            raise NotAchievedException("tune has aborted, overtuned")
+
+        self.progress("using aux fn for save tune")
+
+        # to test aux function method, use aux fn for save
+        self.run_auxfunc(181, 2)
+        self.wait_text("Quicktune: saved", check_context=True)
+        self.change_mode("QLAND")
+
+        self.wait_disarmed(timeout=120)
+        self.set_parameter("QWIK_ENABLE", 0)
+        self.context_pop()
+        self.reboot_sitl()
+
     def PrecisionLanding(self):
         '''VTOL precision landing'''
 
@@ -1644,6 +1733,33 @@ class AutoTestQuadPlane(vehicle_test_suite.TestSuite):
 
         self.fly_home_land_and_disarm()
 
+    def BackTransitionMinThrottle(self):
+        '''Ensure min throttle is applied during back transition.'''
+        wps = self.create_simple_relhome_mission([
+            (mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 30),
+            (mavutil.mavlink.MAV_CMD_NAV_WAYPOINT, 2000, 0, 30),
+            (mavutil.mavlink.MAV_CMD_NAV_RETURN_TO_LAUNCH, 0, 0, 0),
+        ])
+        self.check_mission_upload_download(wps)
+        self.set_parameter('Q_RTL_MODE', 1)
+
+        trim_pwm = 1000 + 10*self.get_parameter("TRIM_THROTTLE")
+        min_pwm = 1000 + 10*self.get_parameter("THR_MIN")
+
+        self.change_mode('AUTO')
+        self.wait_ready_to_arm()
+
+        self.arm_vehicle()
+        self.context_collect('STATUSTEXT')
+
+        self.wait_statustext("VTOL airbrake", check_context=True, timeout=300)
+        self.wait_servo_channel_value(3, trim_pwm, comparator=operator.le, timeout=1)
+
+        self.wait_statustext("VTOL position1", check_context=True, timeout=10)
+        self.wait_servo_channel_value(3, min_pwm+10, comparator=operator.le, timeout=1)
+
+        self.wait_disarmed(timeout=60)
+
     def MAV_CMD_NAV_TAKEOFF(self):
         '''test issuing takeoff command via mavlink'''
         self.change_mode('GUIDED')
@@ -1737,8 +1853,8 @@ class AutoTestQuadPlane(vehicle_test_suite.TestSuite):
 
         # Kill any GPSs
         self.set_parameters({
-            'SIM_GPS_DISABLE': 1,
-            'SIM_GPS2_DISABLE': 1,
+            'SIM_GPS1_ENABLE': 0,
+            'SIM_GPS2_ENABLE': 0,
         })
         self.delay_sim_time(5)
 
@@ -1812,6 +1928,141 @@ class AutoTestQuadPlane(vehicle_test_suite.TestSuite):
             timeout=120,
         )
 
+    def AHRSFlyForwardFlag(self):
+        '''ensure FlyForward flag is set appropriately'''
+        self.set_parameters({
+            "LOG_DISARMED": 1,
+            "LOG_REPLAY": 1,
+        })
+        self.reboot_sitl()
+
+        self.assert_mode_is('FBWA')
+        self.delay_sim_time(10)
+        self.change_mode('QHOVER')
+        self.delay_sim_time(10)
+
+        self.wait_ready_to_arm()
+        self.arm_vehicle()
+        self.set_rc(3, 2000)
+        self.wait_altitude(20, 50, relative=True)
+        self.context_collect('STATUSTEXT')
+        self.change_mode('CRUISE')
+        self.set_rc(3, 1500)
+        self.wait_statustext('Transition started airspeed', check_context=True)
+        self.wait_statustext('Transition airspeed reached', check_context=True)
+        self.wait_statustext('Transition done', check_context=True)
+        self.delay_sim_time(5)
+        self.change_mode('QHOVER')
+        self.wait_airspeed(0, 5)
+        self.delay_sim_time(5)
+        mlog_path = self.current_onboard_log_filepath()
+        self.fly_home_land_and_disarm(timeout=600)
+
+        mlog = self.dfreader_for_path(mlog_path)
+
+        stage_require_fbwa = "require_fbwa"
+        stage_wait_qhover = "wait_qhover"
+        stage_verify_qhover_ff = "verify_qhover_ff"
+        stage_wait_cruise = "wait_cruise"
+        stage_cruise_wait_ff = "cruise_wait_ff"
+        stage_qhover2 = "qhover2"
+        stage_done = "done"
+        stage = stage_require_fbwa
+        msgs = {}
+        seen_flag_set_in_cruise = False
+        FF_BIT_MASK = (1 << 2)
+        while stage != stage_done:
+            m = mlog.recv_match()
+            if m is None:
+                raise NotAchievedException(f"Stuck in stage {stage}")
+            m_type = m.get_type()
+            msgs[m_type] = m
+
+            if stage == stage_require_fbwa:
+                if m_type == 'MODE':
+                    if m.ModeNum == self.get_mode_from_mode_mapping('MANUAL'):
+                        # manual to start with
+                        continue
+                    fbwa_num = self.get_mode_from_mode_mapping('FBWA')
+                    print(f"{m.ModeNum=} {fbwa_num=}")
+                    if m.ModeNum != fbwa_num:
+                        raise ValueError(f"wanted mode={fbwa_num} got={m.ModeNum}")
+                    continue
+                if m_type == 'RFRN':
+                    if not m.Flags & FF_BIT_MASK:
+                        raise ValueError("Expected FF to be set in FBWA")
+                    stage = stage_wait_qhover
+                    continue
+                continue
+
+            if stage == stage_wait_qhover:
+                if m_type == 'MODE':
+                    qhover_num = self.get_mode_from_mode_mapping('QHOVER')
+                    print(f"want={qhover_num} got={m.ModeNum}")
+                    if m.ModeNum == qhover_num:
+                        stage = stage_verify_qhover_ff
+                        continue
+                    continue
+                continue
+
+            if stage == stage_verify_qhover_ff:
+                if m_type == 'RFRN':
+                    if m.Flags & FF_BIT_MASK:
+                        raise ValueError("Expected FF to be unset in QHOVER")
+                    stage = stage_wait_cruise
+                    continue
+                continue
+
+            if stage == stage_wait_cruise:
+                if m_type == 'MODE':
+                    want_num = self.get_mode_from_mode_mapping('CRUISE')
+                    if m.ModeNum == want_num:
+                        stage = stage_cruise_wait_ff
+                        cruise_wait_ff_start = msgs['ATT'].TimeUS*1e-6
+                        continue
+                    continue
+                continue
+
+            if stage == stage_cruise_wait_ff:
+                if m_type == 'MODE':
+                    want_num = self.get_mode_from_mode_mapping('CRUISE')
+                    if want_num != m.ModeNum:
+                        if not seen_flag_set_in_cruise:
+                            raise ValueError("Never saw FF get set")
+                    if m.ModeNum == self.get_mode_from_mode_mapping('QHOVER'):
+                        stage = stage_qhover2
+                        continue
+                    continue
+                if m_type == 'RFRN':
+                    flag_set = m.Flags & FF_BIT_MASK
+                    now = msgs['ATT'].TimeUS*1e-6
+                    delta_t = now - cruise_wait_ff_start
+                    if delta_t < 8:
+                        if flag_set:
+                            raise ValueError("Should not see bit set")
+                    if delta_t > 10:
+                        if not flag_set and not seen_flag_set_in_cruise:
+                            raise ValueError("Should see bit set")
+                        seen_flag_set_in_cruise = True
+                    continue
+                continue
+
+            if stage == stage_qhover2:
+                '''bit should stay low for qhover 2'''
+                if m_type == 'RFRN':
+                    flag_set = m.Flags & FF_BIT_MASK
+                    if flag_set:
+                        raise ValueError("ff should be low in qhover")
+                    continue
+                if m_type == 'MODE':
+                    if m.ModeNum != self.get_mode_from_mode_mapping('QHOVER'):
+                        stage = stage_done
+                        continue
+                    continue
+                continue
+
+            raise NotAchievedException("Bad stage")
+
     def RTL_AUTOLAND_1_FROM_GUIDED(self):
         '''test behaviour when RTL_AUTOLAND==1 and entering from guided'''
 
@@ -1858,6 +2109,58 @@ class AutoTestQuadPlane(vehicle_test_suite.TestSuite):
 
         self.fly_home_land_and_disarm()
 
+    def WindEstimateConsistency(self):
+        '''test that DCM and EKF3 roughly agree on wind speed and direction'''
+        self.set_parameters({
+            'SIM_WIND_SPD': 10,   # metres/second
+            'SIM_WIND_DIR': 315,  # from the North-West
+        })
+        self.change_mode('TAKEOFF')
+        self.wait_ready_to_arm()
+        self.arm_vehicle()
+        self.delay_sim_time(180)
+        mlog = self.dfreader_for_current_onboard_log()
+        self.fly_home_land_and_disarm()
+
+        self.progress("Inspecting dataflash log")
+        match_start_time = None
+        dcm = None
+        xkf2 = None
+        while True:
+            m = mlog.recv_match(
+                type=['DCM', 'XKF2'],
+                blocking=True,
+            )
+            if m is None:
+                raise NotAchievedException("Did not see wind estimates match")
+
+            m_type = m.get_type()
+            if m_type == 'DCM':
+                dcm = m
+            else:
+                xkf2 = m
+            if dcm is None or xkf2 is None:
+                continue
+
+            now = m.TimeUS * 1e-6
+
+            matches_east = abs(dcm.VWE-xkf2.VWE) < 1.5
+            matches_north = abs(dcm.VWN-xkf2.VWN) < 1.5
+
+            matches = matches_east and matches_north
+
+            if not matches:
+                match_start_time = None
+                continue
+
+            if match_start_time is None:
+                match_start_time = now
+                continue
+
+            if now - match_start_time > 60:
+                self.progress("Wind estimates correlated")
+                break
+
     def tests(self):
         '''return list of all tests'''
 
@@ -1885,10 +2188,12 @@ class AutoTestQuadPlane(vehicle_test_suite.TestSuite):
             self.GUIDEDToAUTO,
             self.BootInAUTO,
             self.Ship,
+            self.WindEstimateConsistency,
             self.MAV_CMD_NAV_LOITER_TO_ALT,
             self.LoiterAltQLand,
             self.VTOLLandSpiral,
             self.VTOLQuicktune,
+            self.VTOLQuicktune_CPP,
             self.PrecisionLanding,
             self.ShipLanding,
             Test(self.MotorTest, kwargs={  # tests motors 4 and 2
@@ -1901,10 +2206,12 @@ class AutoTestQuadPlane(vehicle_test_suite.TestSuite):
             self.mission_MAV_CMD_DO_VTOL_TRANSITION,
             self.mavlink_MAV_CMD_DO_VTOL_TRANSITION,
             self.TransitionMinThrottle,
+            self.BackTransitionMinThrottle,
             self.MAV_CMD_NAV_TAKEOFF,
             self.Q_GUIDED_MODE,
             self.DCMClimbRate,
             self.RTL_AUTOLAND_1,  # as in fly-home then go to landing sequence
             self.RTL_AUTOLAND_1_FROM_GUIDED,  # as in fly-home then go to landing sequence
+            self.AHRSFlyForwardFlag,
         ])
         return ret

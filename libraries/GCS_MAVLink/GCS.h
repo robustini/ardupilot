@@ -267,6 +267,9 @@ public:
     // accessor for uart
     AP_HAL::UARTDriver *get_uart() { return _port; }
 
+    // cap the MAVLink message rate. It can't be greater than 0.8 * SCHED_LOOP_RATE
+    uint16_t cap_message_interval(uint16_t interval_ms) const;
+
     virtual uint8_t sysid_my_gcs() const = 0;
     virtual bool sysid_enforce() const { return false; }
 
@@ -408,6 +411,10 @@ public:
 #endif // HAL_HIGH_LATENCY2_ENABLED
     void send_uavionix_adsb_out_status() const;
     void send_autopilot_state_for_gimbal_device() const;
+
+    // Send the mode with the given index (not mode number!) return the total number of modes
+    // Index starts at 1
+    virtual uint8_t send_available_mode(uint8_t index) const = 0;
 
     // lock a channel, preventing use by MAVLink
     void lock(bool _lock) {
@@ -1123,6 +1130,17 @@ private:
     // true if we should NOT do MAVLink on this port (usually because
     // someone's doing SERIAL_CONTROL over mavlink)
     bool _locked;
+
+    // Handling of AVAILABLE_MODES
+    struct {
+        bool should_send;
+        // Note these start at 1
+        uint8_t requested_index;
+        uint8_t next_index;
+    } available_modes;
+    bool send_available_modes();
+    bool send_available_mode_monitor();
+
 };
 
 /// @class GCS
@@ -1284,6 +1302,11 @@ public:
     MAV_RESULT lua_command_int_packet(const mavlink_command_int_t &packet);
 #endif
 
+    // Sequence number should be incremented when available modes changes
+    // Sent in AVAILABLE_MODES_MONITOR msg
+    uint8_t get_available_modes_sequence() const { return available_modes_sequence; }
+    void available_modes_changed() { available_modes_sequence += 1; }
+
 protected:
 
     virtual GCS_MAVLINK *new_gcs_mavlink_backend(GCS_MAVLINK_Parameters &params,
@@ -1361,6 +1384,10 @@ private:
     // GCS::update_send is called so we don't starve later links of
     // time in which they are permitted to send messages.
     uint8_t first_backend_to_send;
+
+    // Sequence number should be incremented when available modes changes
+    // Sent in AVAILABLE_MODES_MONITOR msg
+    uint8_t available_modes_sequence;
 };
 
 GCS &gcs();

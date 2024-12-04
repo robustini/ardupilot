@@ -16,6 +16,7 @@ void Plane::init_ardupilot()
     pitchController.convert_pid();
 
     // initialise rc channels including setting mode
+    // CONVERSION: Added for upgrade to ArduPlane 4.2, Sep 2021
 #if HAL_QUADPLANE_ENABLED
     rc().convert_options(RC_Channel::AUX_FUNC::ARMDISARM_UNUSED, (quadplane.enabled() && quadplane.option_is_set(QuadPlane::OPTION::AIRMODE_UNUSED) && (rc().find_channel_for_option(RC_Channel::AUX_FUNC::AIRMODE) == nullptr)) ? RC_Channel::AUX_FUNC::ARMDISARM_AIRMODE : RC_Channel::AUX_FUNC::ARMDISARM);
 #else
@@ -127,6 +128,9 @@ void Plane::init_ardupilot()
 
     // initialise mission library
     mission.init();
+#if HAL_LOGGING_ENABLED
+    mission.set_log_start_mission_item_bit(MASK_LOG_CMD);
+#endif
 
     // initialise AP_Logger library
 #if HAL_LOGGING_ENABLED

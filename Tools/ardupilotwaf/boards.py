@@ -57,6 +57,7 @@ class Board:
         def srcpath(path):
             return cfg.srcnode.make_node(path).abspath()
         env.SRCROOT = srcpath('')
+
         self.configure_env(cfg, env)
 
         # Setup scripting:
@@ -176,7 +177,10 @@ class Board:
 
         if cfg.options.enable_networking_tests:
             env.CXXFLAGS += ['-DAP_NETWORKING_TESTS_ENABLED=1']
-            
+
+        if cfg.options.enable_iomcu_profiled_support:
+            env.CXXFLAGS += ['-DAP_IOMCU_PROFILED_SUPPORT_ENABLED=1']
+
         d = env.get_merged_dict()
         # Always prepend so that arguments passed in the command line get
         # the priority.
@@ -360,10 +364,10 @@ class Board:
             '-Wpointer-arith',
             '-Wno-unused-parameter',
             '-Wno-missing-field-initializers',
-            '-Wno-reorder',
             '-Wno-redundant-decls',
             '-Wno-unknown-pragmas',
             '-Wno-expansion-to-defined',
+            '-Werror=reorder',
             '-Werror=cast-align',
             '-Werror=attributes',
             '-Werror=format-security',
@@ -695,6 +699,12 @@ class sitl(Board):
         cfg.define('AP_NOTIFY_LP5562_BUS', 2)
         cfg.define('AP_NOTIFY_LP5562_ADDR', 0x30)
 
+        # turn on fencepoint and rallypoint protocols so they're still tested:
+        env.CXXFLAGS.extend([
+            '-DAP_MAVLINK_RALLY_POINT_PROTOCOL_ENABLED=HAL_GCS_ENABLED&&HAL_RALLY_ENABLED',
+            '-DAC_POLYFENCE_FENCE_POINT_PROTOCOL_SUPPORT=HAL_GCS_ENABLED&&AP_FENCE_ENABLED'
+        ])
+
         try:
             env.CXXFLAGS.remove('-DHAL_NAVEKF2_AVAILABLE=0')
         except ValueError:
@@ -1002,7 +1012,7 @@ class esp32(Board):
         )
 
         tt = self.name[5:] #leave off 'esp32' so we just get 'buzz','diy','icarus, etc
-        
+
         # this makes sure we get the correct subtype
         env.DEFINES.update(
             CONFIG_HAL_BOARD_SUBTYPE = 'HAL_BOARD_SUBTYPE_ESP32_%s' %  tt.upper() ,
@@ -1017,6 +1027,9 @@ class esp32(Board):
             ]
         else:
             env.DEFINES.update(AP_SIM_ENABLED = 0)
+
+        # FreeRTOS component from esp-idf expects this define
+        env.DEFINES.update(ESP_PLATFORM = 1)
 
         env.AP_LIBRARIES += [
             'AP_HAL_ESP32',
@@ -1429,6 +1442,17 @@ class navigator(linux):
         env.DEFINES.update(
             CONFIG_HAL_BOARD_SUBTYPE='HAL_BOARD_SUBTYPE_LINUX_NAVIGATOR',
         )
+
+class navigator64(linux):
+    toolchain = 'aarch64-linux-gnu'
+
+    def configure_env(self, cfg, env):
+        super(navigator64, self).configure_env(cfg, env)
+
+        env.DEFINES.update(
+            CONFIG_HAL_BOARD_SUBTYPE='HAL_BOARD_SUBTYPE_LINUX_NAVIGATOR',
+        )
+
 
 class erleboard(linux):
     toolchain = 'arm-linux-gnueabihf'

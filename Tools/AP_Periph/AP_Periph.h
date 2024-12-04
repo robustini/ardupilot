@@ -6,6 +6,7 @@
 #include <AP_GPS/AP_GPS.h>
 #include <AP_Compass/AP_Compass.h>
 #include <AP_Baro/AP_Baro.h>
+#include <AP_InertialSensor/AP_InertialSensor.h>
 #include "SRV_Channel/SRV_Channel.h"
 #include <AP_Notify/AP_Notify.h>
 #include <AP_Logger/AP_Logger.h>
@@ -173,6 +174,10 @@ public:
     void send_relposheading_msg();
     void can_baro_update();
     void can_airspeed_update();
+#ifdef HAL_PERIPH_ENABLE_IMU
+    void can_imu_update();
+#endif
+
 #ifdef HAL_PERIPH_ENABLE_RANGEFINDER
     void can_rangefinder_update();
 #endif
@@ -228,6 +233,10 @@ public:
 
 #ifdef HAL_PERIPH_ENABLE_BARO
     AP_Baro baro;
+#endif
+
+#ifdef HAL_PERIPH_ENABLE_IMU
+    AP_InertialSensor imu;
 #endif
 
 #ifdef HAL_PERIPH_ENABLE_RPM
@@ -559,6 +568,15 @@ public:
     uint16_t pool_peak_percent();
     void set_rgb_led(uint8_t red, uint8_t green, uint8_t blue);
 
+#if AP_SIM_ENABLED
+    // update simulation of servos
+    void sim_update_actuator(uint8_t actuator_id);
+    struct {
+        uint32_t mask;
+        uint32_t last_send_ms;
+    } sim_actuator;
+#endif
+    
     struct dronecan_protocol_t {
         CanardInstance canard;
         uint32_t canard_memory_pool[HAL_CAN_POOL_SIZE/sizeof(uint32_t)];

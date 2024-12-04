@@ -53,6 +53,15 @@ public:
      */
     virtual bool update() = 0; /* front end */
 
+    // if AP_INERTIALSENSOR_FAST_SAMPLE_WINDOW_ENABLED
+    /*
+     * Update the filter parameters. Called by the frontend to propagate
+     * filter parameters to the frontend structure via the
+     * update_gyro_filters() and update_accel_filters() functions
+     */
+    void update_filters() __RAMFUNC__; /* front end */
+    // endif AP_INERTIALSENSOR_FAST_SAMPLE_WINDOW_ENABLED
+
     /*
      * optional function to accumulate more samples. This is needed for drivers that don't use a timer to gather samples
      */
@@ -136,6 +145,7 @@ public:
         DEVTYPE_INS_ICM42670 = 0x3A,
         DEVTYPE_INS_ICM45686 = 0x3B,
         DEVTYPE_INS_SCHA63T  = 0x3C,
+        DEVTYPE_INS_IIM42653 = 0x3D,
     };
 
 protected:
