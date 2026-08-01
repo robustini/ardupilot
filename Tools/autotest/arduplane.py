@@ -8578,7 +8578,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self._snav_start_active_navigation()
             self.context_clear_collection("STATUSTEXT")
             self.wait_text("SoarNav: TEc", timeout=60, check_context=True)
-            self.delay_sim_time(35)
+            self.delay_sim_time(35, reason="collect SoarNav terrain-evasion target transitions")
             messages = [m.text for m in self.context_collection("STATUSTEXT")]
             public_targets = []
             for text in messages:
@@ -8662,7 +8662,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
                 timeout=60,
                 regex=True,
                 check_context=True)
-            self.delay_sim_time(30)
+            self.delay_sim_time(30, reason="allow SoarNav terrain-evasion altitude limits to settle")
             self.assert_parameter_values({
                 "SOAR_ALT_MIN": 20,
                 "SOAR_ALT_CUTOFF": 120,
@@ -8684,7 +8684,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.wait_text(r"SoarNav: Rally A=.*RP=4", timeout=60, regex=True, check_context=True)
             self.context_clear_collection("STATUSTEXT")
             self.change_mode("RTL")
-            self.delay_sim_time(20)
+            self.delay_sim_time(20, reason="observe SoarNav RTL helper mode behaviour")
             mode = self.mav.flightmode
             if mode not in ["RTL", "GUIDED"]:
                 raise NotAchievedException("SoarNav RTL helper left vehicle in unexpected mode %s" % mode)
