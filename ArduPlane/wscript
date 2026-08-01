@@ -20,6 +20,7 @@ def build(bld):
             'AP_Landing',
             'PID',
             'AP_Soaring',
+            'AP_SoarNav',
             'AP_LTM_Telem',
             'AP_Devo_Telem',
             'AC_AutoTune',

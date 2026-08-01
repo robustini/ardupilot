@@ -206,7 +206,14 @@ void Plane::calc_airspeed_errors()
 #endif // AP_PLANE_OFFBOARD_GUIDED_SLEW_ENABLED
 
 #if HAL_SOARING_ENABLED
-    } else if (g2.soaring_controller.is_active() && g2.soaring_controller.get_throttle_suppressed()) {
+    } else if (g2.soaring_controller.is_active() &&
+               g2.soaring_controller.get_throttle_suppressed() &&
+               (control_mode == &mode_thermal ||
+                control_mode == &mode_auto
+#if HAL_SOARNAV_ENABLED
+                || (control_mode == &mode_guided && mode_guided.soarnav_horizontal_target_active())
+#endif
+               )) {
         if (control_mode == &mode_thermal) {
             float arspd = g2.soaring_controller.get_thermalling_target_airspeed();
 
@@ -215,8 +222,13 @@ void Plane::calc_airspeed_errors()
             } else {
                 target_airspeed_cm = aparm.airspeed_cruise*100;
             }
-        } else if (control_mode == &mode_auto) {
-            float arspd = g2.soaring_controller.get_cruising_target_airspeed();
+        } else {
+            const float arspd =
+#if HAL_SOARNAV_ENABLED
+                                control_mode == &mode_guided ?
+                                mode_guided.soarnav_guided_cruise_airspeed() :
+#endif
+                                g2.soaring_controller.get_cruising_target_airspeed();
 
             if (arspd > 0) {
                 target_airspeed_cm = arspd * 100;

@@ -45,8 +45,12 @@ void Plane::update_soaring() {
             // Cruising modes update.
             g2.soaring_controller.update_cruising();
 
-            // Test for switch into THERMAL mode
-            if (g2.soaring_controller.check_thermal_criteria()) {
+            // Test for switch into THERMAL mode. Some modes, such as
+            // SoarNav-guided terrain evasion, still need soaring cruise updates
+            // and throttle suppression but must not enter THERMAL from maneuver
+            // contaminated vario data.
+            if (!control_mode->inhibits_automatic_thermal_entry() &&
+                g2.soaring_controller.check_thermal_criteria()) {
                 gcs().send_text(MAV_SEVERITY_INFO, "Soaring: Thermal detected, entering %s", mode_thermal.name());
                 set_mode(mode_thermal, ModeReason::SOARING_THERMAL_DETECTED);
             }

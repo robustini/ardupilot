@@ -8367,6 +8367,334 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
 
             self.progress(msg)
 
+    def _snav_cleanup(self, ex=None):
+        if self.armed():
+            self.disarm_vehicle(force=True)
+        self.context_pop()
+        self.reboot_sitl()
+        if ex is not None:
+            raise ex
+
+    def _snav_common_start(self, params=None, collect=True):
+        model = "plane-soaring"
+        self.customise_SITL_commandline(
+            [],
+            model=model,
+            defaults_filepath=self.model_defaults_filepath(model),
+            wipe=True)
+        self.context_push()
+        self.install_terrain_handlers_context()
+        if collect:
+            self.context_collect("STATUSTEXT")
+        self.set_rc(7, 1900)
+        base_params = {
+            "SOAR_ENABLE": 1,
+            "SIM_THML_SCENARI": 0,
+            "SNAV_ENABLE": 1,
+            "SNAV_AUTO_START": 1,
+            "SNAV_LOG_LVL": 2,
+            "SNAV_RADIUS_M": 700,
+            "SNAV_WP_RADIUS": 50,
+            "SNAV_REROUTE_P": 0,
+            "SNAV_DYN_SOALT": 0,
+            "SNAV_TE_LOOK_S": 10,
+            "SNAV_TE_BUF_MIN": 80,
+            "TERRAIN_ENABLE": 1,
+            "TERRAIN_SPACING": 100,
+            "TECS_SINK_MIN": 2,
+        }
+        if params is not None:
+            base_params.update(params)
+        self.set_parameters(base_params)
+
+    def _snav_rally_square_locations(self, size_m=650):
+        home = self.mav.location()
+        ret = []
+        for north, east in [(-size_m, -size_m), (-size_m, size_m), (size_m, size_m), (size_m, -size_m)]:
+            loc = mavutil.location(home.lat, home.lng, home.alt + 100, 0)
+            self.location_offset_ne(loc, north, east)
+            ret.append(loc)
+        return ret
+
+    def _snav_start_active_navigation(self, timeout=45):
+        self.load_mission_from_filepath(
+            os.path.join(testdir, 'ArduPlane_Tests/Soaring/CMAC-soar.txt'),
+            strict=False)
+        self.set_current_waypoint(1)
+        self.set_rc(7, 1900)
+        self.change_mode("AUTO")
+        if not self.armed():
+            self.wait_ready_to_arm()
+            self.arm_vehicle()
+        self.wait_altitude(60, 180, timeout=120, relative=True)
+        self.change_mode("CRUISE")
+        self.wait_text("SoarNav: Auto-start", timeout=timeout, check_context=True)
+        self.wait_text("SoarNav: State NAV", timeout=timeout, check_context=True)
+        self.wait_mode("GUIDED", timeout=timeout)
+
+    def _snav_wait_any_normal_target(self, timeout=45):
+        self.wait_text(
+            r"SoarNav: .*\[(Pure|Guided|Random Fallback)\]",
+            timeout=timeout,
+            regex=True,
+            check_context=True)
+
+    def SoarNavAutoStartDefault(self):
+        """Test SoarNav requires the activation gesture by default"""
+        ex = None
+        model = "plane-soaring"
+        self.customise_SITL_commandline(
+            [],
+            model=model,
+            defaults_filepath=self.model_defaults_filepath(model),
+            wipe=True)
+        self.context_push()
+        try:
+            self.assert_parameter_values({"SNAV_AUTO_START": 0})
+        except Exception as e:  # noqa: BLE001
+            self.print_exception_caught(e)
+            ex = e
+        self._snav_cleanup(ex)
+
+    def SoarNavEnableParam(self):
+        """Test SoarNav enable parameter is strictly 0 or 1"""
+        ex = None
+        self._snav_common_start(params={"SNAV_ENABLE": 0})
+        try:
+            self.set_parameter("SNAV_LOG_LVL", 2)
+            self.send_set_parameter("SNAV_ENABLE", 2, verbose=True)
+            self.wait_text("SoarNav: SNAV_ENABLE invalid; disabled.", timeout=20, check_context=True)
+            self.wait_parameter_value("SNAV_ENABLE", 0, timeout=10)
+            self.set_parameter("SNAV_ENABLE", 1)
+            self.assert_parameter_values({"SNAV_ENABLE": 1})
+            self.set_parameter("SNAV_ENABLE", 0)
+            self.assert_parameter_values({"SNAV_ENABLE": 0})
+        except Exception as e:  # noqa: BLE001
+            self.print_exception_caught(e)
+            ex = e
+        self._snav_cleanup(ex)
+
+    def SoarNavRadiusNegative(self):
+        """Test negative SNAV_RADIUS_M disables SoarNav instead of selecting Rally polygon mode"""
+        ex = None
+        self._snav_common_start(params={
+            "SNAV_ENABLE": 0,
+            "SNAV_RADIUS_M": -1,
+        })
+        try:
+            self.wait_ready_to_arm()
+            self.set_rc(3, 1000)
+            self.set_rc(7, 1900)
+            self.arm_vehicle()
+            self.send_set_parameter("SNAV_ENABLE", 1, verbose=True)
+            self.wait_text("SoarNav: SNAV_RADIUS_M negative; disabled.", timeout=30, check_context=True)
+            self.wait_parameter_value("SNAV_ENABLE", 0, timeout=10)
+            if self.statustext_in_collections("SoarNav: State NAV", regex=False) is not None:
+                raise NotAchievedException("SoarNav entered NAV with negative SNAV_RADIUS_M")
+            if self.statustext_in_collections(r"SoarNav: Rally A=.*RP=", regex=True) is not None:
+                raise NotAchievedException("SoarNav treated negative SNAV_RADIUS_M as Rally polygon mode")
+        except Exception as e:  # noqa: BLE001
+            self.print_exception_caught(e)
+            ex = e
+        self._snav_cleanup(ex)
+
+    def SoarNavRadiusArea(self):
+        """Test SNAV_RADIUS_M > 0 uses radius area even when Rally points exist"""
+        ex = None
+        self._snav_common_start(params={"SNAV_RADIUS_M": 600})
+        try:
+            self.wait_ready_to_arm()
+            self.upload_rally_points_from_locations(self._snav_rally_square_locations())
+            self._snav_start_active_navigation()
+            self.wait_text(r"SoarNav: Radius A=.*RD=600", timeout=45, regex=True, check_context=True)
+            if self.statustext_in_collections(r"SoarNav: Rally A=.*RP=", regex=True) is not None:
+                raise NotAchievedException("SoarNav used Rally polygon while SNAV_RADIUS_M was > 0")
+            self._snav_wait_any_normal_target()
+        except Exception as e:  # noqa: BLE001
+            self.print_exception_caught(e)
+            ex = e
+        self._snav_cleanup(ex)
+
+    def SoarNavRallyPolygonArea(self):
+        """Test SNAV_RADIUS_M = 0 uses Rally polygon area"""
+        ex = None
+        self._snav_common_start(params={"SNAV_RADIUS_M": 0})
+        try:
+            self.wait_ready_to_arm()
+            self.upload_rally_points_from_locations(self._snav_rally_square_locations())
+            self._snav_start_active_navigation()
+            self.wait_text(r"SoarNav: Rally A=.*RP=4", timeout=60, regex=True, check_context=True)
+            self.wait_text(r"SoarNav: Grid [0-9]+x[0-9]+, cell [0-9]+m, valid [1-9][0-9]*/[1-9][0-9]*", timeout=60, regex=True, check_context=True)
+            if self.statustext_in_collections("No Rally polygon") is not None:
+                raise NotAchievedException("SoarNav rejected a valid Rally polygon")
+            self._snav_wait_any_normal_target()
+        except Exception as e:  # noqa: BLE001
+            self.print_exception_caught(e)
+            ex = e
+        self._snav_cleanup(ex)
+
+    def SoarNavTerrainEvasion(self):
+        """Test native SoarNav terrain-evasion diagnostics and public target source"""
+        ex = None
+        self._snav_common_start()
+        try:
+            self.assert_parameter_values({
+                "SNAV_ENABLE": 1,
+                "SNAV_AUTO_START": 1,
+                "SNAV_LOG_LVL": 2,
+            })
+            self._snav_start_active_navigation()
+            self._snav_wait_any_normal_target()
+
+            self.context_clear_collection("STATUSTEXT")
+            self.set_parameter("SNAV_DYN_SOALT", 3)
+            self.set_parameter("SNAV_TE_BUF_MIN", 220)
+            self.wait_text("SoarNav: TEp", timeout=60, check_context=True)
+            self.wait_text("SoarNav: TEc", timeout=60, check_context=True)
+            self.wait_text(
+                r"SoarNav: .*\[Terrain Evasion\]",
+                timeout=60,
+                regex=True,
+                check_context=True)
+
+            if self.statustext_in_collections("Terrain Evasion degraded") is not None:
+                raise NotAchievedException("degraded Terrain Evasion leaked as public target source")
+
+            te_debug = self.statustext_in_collections(r"SoarNav: TEc[-LR] b[-0-9.]+ a[-0-9.]+ d[-0-9.]+ t[-0-9.]+", regex=True)
+            if te_debug is None:
+                raise NotAchievedException("SoarNav TEc did not include bearing/AGL/distance/threat-time fields")
+            if self.statustext_in_collections(r"SoarNav: .*\[TE Bootstrap\]", regex=True) is not None:
+                raise NotAchievedException("TE Bootstrap leaked as a public target source")
+        except Exception as e:  # noqa: BLE001
+            self.print_exception_caught(e)
+            ex = e
+        self._snav_cleanup(ex)
+
+    def SoarNavTerrainEvasionHysteresis(self):
+        """Test Terrain Evasion does not rapidly alternate public Pure/TE targets"""
+        ex = None
+        self._snav_common_start(params={"SNAV_DYN_SOALT": 3, "SNAV_TE_BUF_MIN": 210})
+        try:
+            self._snav_start_active_navigation()
+            self.context_clear_collection("STATUSTEXT")
+            self.wait_text("SoarNav: TEc", timeout=60, check_context=True)
+            self.delay_sim_time(35)
+            messages = [m.text for m in self.context_collection("STATUSTEXT")]
+            public_targets = []
+            for text in messages:
+                if "SoarNav:" not in text:
+                    continue
+                if "[Terrain Evasion]" in text:
+                    public_targets.append("TE")
+                elif "[Pure]" in text or "[Guided]" in text or "[Random Fallback]" in text:
+                    public_targets.append("NAV")
+            alternations = 0
+            last = None
+            for item in public_targets:
+                if last is not None and item != last:
+                    alternations += 1
+                last = item
+            if alternations > 3:
+                raise NotAchievedException("SoarNav Terrain Evasion target source oscillated %u times" % alternations)
+        except Exception as e:  # noqa: BLE001
+            self.print_exception_caught(e)
+            ex = e
+        self._snav_cleanup(ex)
+
+    def _snav_glide_cone_start(self, mode):
+        self._snav_common_start(params={
+            "SNAV_DYN_SOALT": mode,
+            "SNAV_GC_MARGIN": 80,
+            "SNAV_GC_PAD": 50,
+            "SOAR_ALT_MIN": 20,
+            "SOAR_ALT_CUTOFF": 120,
+            "SOAR_ALT_MAX": 300,
+            "SOAR_POLAR_CD0": 0.028,
+            "SOAR_POLAR_B": 0.031,
+            "AIRSPEED_CRUISE": 12,
+        })
+
+    def SoarNavGlideConeLinked(self):
+        """Test Glide Cone linked mode updates all SOAR altitude limits coherently"""
+        ex = None
+        self._snav_glide_cone_start(1)
+        try:
+            self._snav_start_active_navigation(timeout=60)
+            self._snav_wait_any_normal_target(timeout=60)
+            self.wait_text(r"SoarNav: Glide Cone", timeout=120, regex=True, check_context=True)
+            linked_min = self.get_parameter("SOAR_ALT_MIN")
+            linked_cutoff = self.get_parameter("SOAR_ALT_CUTOFF")
+            linked_max = self.get_parameter("SOAR_ALT_MAX")
+            if linked_min <= 20:
+                raise NotAchievedException("Glide Cone mode 1 did not raise SOAR_ALT_MIN")
+            if linked_cutoff < linked_min or linked_max < linked_cutoff:
+                raise NotAchievedException("Glide Cone mode 1 produced incoherent SOAR altitude ordering")
+        except Exception as e:  # noqa: BLE001
+            self.print_exception_caught(e)
+            ex = e
+        self._snav_cleanup(ex)
+
+    def SoarNavGlideConeMinOnly(self):
+        """Test Glide Cone minimum-only mode in an independent SITL flight"""
+        ex = None
+        self._snav_glide_cone_start(2)
+        try:
+            self._snav_start_active_navigation(timeout=60)
+            self._snav_wait_any_normal_target(timeout=60)
+            self.wait_parameter_value("SOAR_ALT_MIN", 80, timeout=120)
+            self.assert_parameter_values({
+                "SOAR_ALT_CUTOFF": 120,
+                "SOAR_ALT_MAX": 300,
+            })
+        except Exception as e:  # noqa: BLE001
+            self.print_exception_caught(e)
+            ex = e
+        self._snav_cleanup(ex)
+
+    def SoarNavGlideConeTerrainEvasion(self):
+        """Test Terrain Evasion mode leaves SOAR altitude limits unchanged"""
+        ex = None
+        self._snav_glide_cone_start(3)
+        try:
+            self._snav_start_active_navigation(timeout=60)
+            self.wait_text(
+                r"SoarNav: .*\[Terrain Evasion\]",
+                timeout=60,
+                regex=True,
+                check_context=True)
+            self.delay_sim_time(30)
+            self.assert_parameter_values({
+                "SOAR_ALT_MIN": 20,
+                "SOAR_ALT_CUTOFF": 120,
+                "SOAR_ALT_MAX": 300,
+            })
+        except Exception as e:  # noqa: BLE001
+            self.print_exception_caught(e)
+            ex = e
+        self._snav_cleanup(ex)
+
+    def SoarNavRTLHome(self):
+        """Test Rally polygon RTL helper can engage without breaking RTL flow"""
+        ex = None
+        self._snav_common_start(params={"SNAV_RADIUS_M": 0})
+        try:
+            self.wait_ready_to_arm()
+            self.upload_rally_points_from_locations(self._snav_rally_square_locations())
+            self._snav_start_active_navigation(timeout=60)
+            self.wait_text(r"SoarNav: Rally A=.*RP=4", timeout=60, regex=True, check_context=True)
+            self.context_clear_collection("STATUSTEXT")
+            self.change_mode("RTL")
+            self.delay_sim_time(20)
+            mode = self.mav.flightmode
+            if mode not in ["RTL", "GUIDED"]:
+                raise NotAchievedException("SoarNav RTL helper left vehicle in unexpected mode %s" % mode)
+            if self.statustext_in_collections("SoarNav: RTL Stall", regex=False) is not None:
+                self.wait_mode("GUIDED", timeout=10)
+        except Exception as e:  # noqa: BLE001
+            self.print_exception_caught(e)
+            ex = e
+        self._snav_cleanup(ex)
+
     def SoaringClimbRate(self):
         '''test displayed climb rate when soaring'''
         self.set_parameters({
@@ -8758,6 +9086,17 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.WatchdogHome,
             self.LargeMissions,
             self.Soaring,
+            self.SoarNavAutoStartDefault,
+            self.SoarNavEnableParam,
+            self.SoarNavRadiusNegative,
+            self.SoarNavRadiusArea,
+            self.SoarNavRallyPolygonArea,
+            self.SoarNavTerrainEvasion,
+            self.SoarNavTerrainEvasionHysteresis,
+            self.SoarNavGlideConeLinked,
+            self.SoarNavGlideConeMinOnly,
+            self.SoarNavGlideConeTerrainEvasion,
+            self.SoarNavRTLHome,
             self.Terrain,
             self.TerrainMission,
             self.TerrainMissionInterrupt,

@@ -1026,6 +1026,12 @@ const AP_Param::GroupInfo ParametersG2::var_info[] = {
     // @Path: ../libraries/AP_Soaring/AP_Soaring.cpp
     AP_SUBGROUPINFO(soaring_controller, "SOAR_", 8, ParametersG2, SoaringController),
 #endif
+
+#if HAL_SOARNAV_ENABLED
+    // @Group: SNAV_
+    // @Path: ../libraries/AP_SoarNav/AP_SoarNav.cpp
+    { "SNAV_", AP_VAROFFSET(ParametersG2, soarnav), { group_info_ptr : &AP_SoarNav::var_info_visible }, AP_PARAM_FLAG_NESTED_OFFSET | AP_PARAM_FLAG_INFO_POINTER, 42, AP_PARAM_GROUP },
+#endif
   
     // @Param: RUDD_DT_GAIN
     // @DisplayName: rudder differential thrust gain

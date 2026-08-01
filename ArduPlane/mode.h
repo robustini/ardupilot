@@ -4,6 +4,7 @@
 #include <AP_Common/Location.h>
 #include <stdint.h>
 #include <AP_Soaring/AP_Soaring.h>
+#include <AP_SoarNav/AP_SoarNav_config.h>
 #include <AP_ADSB/AP_ADSB.h>
 #include <AP_Vehicle/ModeReason.h>
 #include "quadplane.h"
@@ -121,6 +122,10 @@ public:
 
     // true if automatic switch to thermal mode is supported.
     virtual bool does_automatic_thermal_switch() const {return false; }
+
+    // true when a mode still supports soaring cruise/throttle suppression,
+    // but the current maneuver should not be used to enter THERMAL.
+    virtual bool inhibits_automatic_thermal_entry() const { return false; }
 
     // subclasses override this if they require navigation.
     virtual void navigate() { return; }
@@ -372,6 +377,23 @@ public:
 
     bool does_auto_throttle() const override { return true; }
 
+    bool does_automatic_thermal_switch() const override;
+    bool inhibits_automatic_thermal_entry() const override;
+
+#if HAL_SOARING_ENABLED
+    void save_soaring_target();
+    bool set_soaring_target(Location target_loc, bool terrain_evasion_target = false);
+    bool set_external_soaring_target(Location target_loc);
+    void set_soaring_radius_and_direction(const float radius, const bool direction_is_ccw);
+    bool get_soaring_target(Location &prev_loc, Location &target_loc) const;
+#endif
+
+#if HAL_SOARNAV_ENABLED
+    bool handle_soarnav_guided_request(Location target_loc, bool terrain_evasion_target = false);
+    bool soarnav_horizontal_target_active() const;
+    float soarnav_guided_cruise_airspeed() const;
+#endif
+
     // handle a guided target request from GCS
     bool handle_guided_request(Location target_loc) override;
 
@@ -399,6 +421,40 @@ protected:
 
 private:
     float active_radius_m;
+
+#if HAL_SOARNAV_ENABLED
+    void update_soarnav_energy_reference();
+    void apply_soarnav_energy_reference(Location &loc) const;
+    void prepare_soarnav_target_altitude(Location &loc);
+    void set_soarnav_guided_target_context(const Location &loc, bool terrain_evasion_target);
+    void clear_soarnav_guided_target_context();
+    bool soarnav_param_enabled(const char *name) const;
+    bool soarnav_xy_only_allowed() const;
+    void update_soarnav_energy_target_altitude();
+#endif
+
+#if HAL_SOARING_ENABLED
+    struct {
+        Location prev_loc {};
+        Location target_loc {};
+        float radius_m = 0;
+        int8_t direction = 1;
+#if HAL_SOARNAV_ENABLED
+        bool horizontal_target = false;
+        bool terrain_corridor_target = false;
+        bool energy_ref_valid = false;
+        int32_t energy_ref_amsl_cm = 0;
+#endif
+        bool valid = false;
+    } soaring_restore {};
+#endif
+
+#if HAL_SOARNAV_ENABLED
+    bool soarnav_horizontal_target = false;
+    bool soarnav_terrain_corridor_target = false;
+    bool soarnav_energy_ref_valid = false;
+    int32_t soarnav_energy_ref_amsl_cm = 0;
+#endif
 };
 
 class ModeCircle: public Mode
@@ -1055,6 +1111,8 @@ public:
     void update_soaring();
 
     void navigate() override;
+
+    bool handle_guided_request(Location target_loc) override;
 
     bool allows_throttle_nudging() const override { return true; }
 

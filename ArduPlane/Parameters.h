@@ -505,6 +505,11 @@ public:
     SoaringController soaring_controller;
 #endif
 
+#if HAL_SOARNAV_ENABLED
+    // Native SoarNav target planner
+    AP_SoarNav soarnav;
+#endif
+
     // dual motor tailsitter rudder to differential thrust scaling: 0-100%
     AP_Int8 rudd_dt_gain;
 

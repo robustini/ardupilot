@@ -119,6 +119,9 @@ const AP_Scheduler::Task Plane::scheduler_tasks[] = {
 #if HAL_SOARING_ENABLED
     SCHED_TASK(update_soaring,         50,    400, 126),
 #endif
+#if HAL_SOARNAV_ENABLED
+    SCHED_TASK(update_soarnav,         10,    450, 127),
+#endif
     SCHED_TASK(parachute_check,        10,    200, 129),
 #if AP_TERRAIN_AVAILABLE
     SCHED_TASK_CLASS(AP_Terrain, &plane.terrain, update, 10, 200, 132),
@@ -902,16 +905,27 @@ bool Plane::set_target_location(const Location &target_loc)
     Location loc{target_loc};
     fix_terrain_WP(loc, __AP_LINE__);
 
-    if (plane.control_mode != &plane.mode_guided) {
-        // only accept position updates when in GUIDED mode
-        return false;
-    }
-    // add home alt if needed
     if (!loc.terrain_alt) {
         loc.change_alt_frame(Location::AltFrame::ABSOLUTE);
     }
-    plane.set_guided_WP(loc);
-    return true;
+
+    if (plane.control_mode == &plane.mode_guided) {
+#if HAL_SOARNAV_ENABLED
+        release_soarnav_for_guided_request();
+#endif
+        return plane.mode_guided.handle_guided_request(loc);
+    }
+
+#if HAL_SOARING_ENABLED
+    if (plane.control_mode == &plane.mode_thermal && plane.previous_mode == &plane.mode_guided) {
+#if HAL_SOARNAV_ENABLED
+        release_soarnav_for_guided_request();
+#endif
+        return plane.mode_guided.set_external_soaring_target(loc);
+    }
+#endif
+
+    return false;
 }
 #endif //AP_SCRIPTING_ENABLED || AP_EXTERNAL_CONTROL_ENABLED
 
@@ -919,6 +933,13 @@ bool Plane::set_target_location(const Location &target_loc)
 // get target location (for use by scripting)
 bool Plane::get_target_location(Location& target_loc)
 {
+#if HAL_SOARING_ENABLED
+    if (control_mode == &mode_thermal && previous_mode == &mode_guided) {
+        Location guided_prev_loc;
+        return mode_guided.get_soaring_target(guided_prev_loc, target_loc);
+    }
+#endif
+
     switch (control_mode->mode_number()) {
     case Mode::Number::RTL:
     case Mode::Number::AVOID_ADSB:
@@ -945,6 +966,21 @@ bool Plane::get_target_location(Location& target_loc)
  */
 bool Plane::update_target_location(const Location &old_loc, const Location &new_loc)
 {
+#if HAL_SOARING_ENABLED
+    if (control_mode == &mode_thermal && previous_mode == &mode_guided) {
+        Location guided_prev_loc;
+        Location guided_target_loc;
+
+        if (!mode_guided.get_soaring_target(guided_prev_loc, guided_target_loc) ||
+            !old_loc.same_loc_as(guided_target_loc) ||
+            old_loc.get_alt_frame() != new_loc.get_alt_frame()) {
+            return false;
+        }
+
+        return mode_guided.set_external_soaring_target(new_loc);
+    }
+#endif
+
     /*
       by checking the caller has provided the correct old target
       location we prevent a race condition where the user changes mode

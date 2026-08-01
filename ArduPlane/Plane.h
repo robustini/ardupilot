@@ -67,6 +67,7 @@
 #include <AP_Mission/AP_Mission.h>     // Mission command library
 
 #include <AP_Soaring/AP_Soaring.h>
+#include <AP_SoarNav/AP_SoarNav.h>
 #include <AP_BattMonitor/AP_BattMonitor.h> // Battery monitor library
 
 #include <AP_Arming/AP_Arming.h>
@@ -139,6 +140,7 @@ public:
     friend class AP_Tuning_Plane;
     friend class AP_AdvancedFailsafe_Plane;
     friend class AP_Avoidance_Plane;
+    friend class PlaneSoarNavBackend;
     friend class GCS_Plane;
     friend class RC_Channel_Plane;
     friend class RC_Channels_Plane;
@@ -1207,6 +1209,11 @@ private:
     // soaring.cpp
 #if HAL_SOARING_ENABLED
     void update_soaring();
+#if HAL_SOARNAV_ENABLED
+    void refresh_soarnav_param_visibility();
+    void update_soarnav();
+    void release_soarnav_for_guided_request();
+#endif
 #endif
 
     // RC_Channel.cpp

@@ -467,6 +467,9 @@ void GCS_MAVLINK_Plane::send_hygrometer()
  */
 bool GCS_MAVLINK_Plane::handle_guided_request(AP_Mission::Mission_Command &cmd)
 {
+#if HAL_SOARNAV_ENABLED
+    plane.release_soarnav_for_guided_request();
+#endif
     return plane.control_mode->handle_guided_request(cmd.content.location);
 }
 
@@ -597,7 +600,12 @@ MAV_RESULT GCS_MAVLINK_Plane::handle_command_int_do_reposition(const mavlink_com
             requested_position.change_alt_frame(Location::AltFrame::ABSOLUTE);
         }
 
-        plane.set_guided_WP(requested_position);
+#if HAL_SOARNAV_ENABLED
+        plane.release_soarnav_for_guided_request();
+#endif
+        if (!plane.mode_guided.handle_guided_request(requested_position)) {
+            return MAV_RESULT_FAILED;
+        }
 
         // Loiter radius for planes. Positive radius in meters, direction is controlled by Yaw (param4) value, parsed above
         if (!isnan(packet.param3) && packet.param3 > 0) {
