@@ -9,6 +9,10 @@ bool ModeThermal::_enter()
         return false;
     }
 
+    if (plane.previous_mode == &plane.mode_guided) {
+        plane.mode_guided.save_soaring_target();
+    }
+
     plane.do_loiter_at_location();
     plane.loiter_angle_reset();
 
@@ -118,6 +122,15 @@ void ModeThermal::navigate()
     const float radius = plane.g2.soaring_controller.get_thermalling_radius();
 
     plane.update_loiter(radius);
+}
+
+bool ModeThermal::handle_guided_request(Location target_loc)
+{
+    if (plane.previous_mode == &plane.mode_guided) {
+        return plane.mode_guided.set_external_soaring_target(target_loc);
+    }
+
+    return false;
 }
 
 bool ModeThermal::exit_heading_aligned() const
