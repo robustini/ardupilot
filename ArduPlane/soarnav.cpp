@@ -235,7 +235,7 @@ public:
     bool soar_switch_active() const override
     {
         const RC_Channel *chan = rc().find_channel_for_option(RC_Channel::AUX_FUNC::SOARING);
-        return chan != nullptr && chan->get_aux_switch_pos() != RC_Channel::AuxSwitchPos::LOW;
+        return chan != nullptr && chan->get_aux_switch_pos() == RC_Channel::AuxSwitchPos::HIGH;
     }
 
     bool autotune_active() const override

@@ -25,6 +25,8 @@
 #include <GCS_MAVLink/GCS_MAVLink.h>
 
 class AP_SoarNav {
+    friend class AP_SoarNav_Test;
+
 public:
     class Backend {
     public:
@@ -664,7 +666,8 @@ private:
     void _log_gcs(Backend &backend, MAV_SEVERITY severity, int8_t level, MsgID id, ...) const;
     bool _get_wind_vector(Backend &backend, Vector3f &wind) const;
     bool _generate_target_around_point(const Location &center, float radius_m, Location &target);
-    float _wind_vector_to_bearing_deg(const Vector3f &wind) const;
+    float _wind_to_bearing_deg(const Vector3f &wind) const;
+    float _wind_from_bearing_deg(const Vector3f &wind) const;
     float _ridge_score_at_loc(Backend &backend, const Location &loc, float *ux_e = nullptr, float *uy_n = nullptr) const;
     bool _get_active_center_location(Backend &backend, Location &center) const;
     float _get_agl_m(Backend &backend, const Location &loc) const;
