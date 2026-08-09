@@ -8456,6 +8456,36 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             ex = e
         self._snav_cleanup(ex)
 
+    def SoarNavSoaringSwitchHigh(self):
+        """Test SoarNav only activates with the SOARING switch high"""
+        ex = None
+        self._snav_common_start(params={"SNAV_AUTO_START": 1})
+        try:
+            self.load_mission_from_filepath(
+                os.path.join(testdir, 'ArduPlane_Tests/Soaring/CMAC-soar.txt'),
+                strict=False)
+            self.set_current_waypoint(1)
+            self.set_rc(7, 1500)
+            self.change_mode("AUTO")
+            if not self.armed():
+                self.wait_ready_to_arm()
+                self.arm_vehicle()
+            self.wait_altitude(60, 180, timeout=120, relative=True)
+            self.change_mode("CRUISE")
+            self.delay_sim_time(6, reason="verify SoarNav remains inactive with SOARING middle")
+            if self.statustext_in_collections("SoarNav: State NAV", regex=False) is not None:
+                raise NotAchievedException("SoarNav entered NAV with SOARING switch in middle position")
+            if self.mode_is("GUIDED"):
+                raise NotAchievedException("SoarNav entered GUIDED with SOARING switch in middle position")
+            self.set_rc(7, 1900)
+            self.wait_text("SoarNav: Auto-start", timeout=30, check_context=True)
+            self.wait_text("SoarNav: State NAV", timeout=30, check_context=True)
+            self.wait_mode("GUIDED", timeout=30)
+        except Exception as e:
+            self.print_exception_caught(e)
+            ex = e
+        self._snav_cleanup(ex)
+
     def SoarNavEnableParam(self):
         """Test SoarNav enable parameter is strictly 0 or 1"""
         ex = None
@@ -9087,6 +9117,7 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.LargeMissions,
             self.Soaring,
             self.SoarNavAutoStartDefault,
+            self.SoarNavSoaringSwitchHigh,
             self.SoarNavEnableParam,
             self.SoarNavRadiusNegative,
             self.SoarNavRadiusArea,

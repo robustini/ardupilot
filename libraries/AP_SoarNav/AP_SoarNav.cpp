@@ -673,13 +673,20 @@ bool AP_SoarNav::_generate_target_around_point(const Location &center, float rad
     return true;
 }
 
-float AP_SoarNav::_wind_vector_to_bearing_deg(const Vector3f &wind) const
+float AP_SoarNav::_wind_to_bearing_deg(const Vector3f &wind) const
 {
     if (wind.length() < 0.1f) {
         return 0.0f;
     }
-    const float angle = _wrap_360(degrees(atan2f(wind.y, wind.x)));
-    return _wrap_360(450.0f - angle);
+    return _wrap_360(degrees(atan2f(wind.y, wind.x)));
+}
+
+float AP_SoarNav::_wind_from_bearing_deg(const Vector3f &wind) const
+{
+    if (wind.length() < 0.1f) {
+        return 0.0f;
+    }
+    return _wrap_360(degrees(atan2f(-wind.y, -wind.x)));
 }
 
 float AP_SoarNav::_ridge_score_at_loc(Backend &backend, const Location &loc, float *ux_e, float *uy_n) const
@@ -718,8 +725,8 @@ float AP_SoarNav::_ridge_score_at_loc(Backend &backend, const Location &loc, flo
     const float ux = gx_e / gnorm;
     const float uy = gy_n / gnorm;
     const float wnorm = MAX(1.0e-6f, sqrtf(wind.x * wind.x + wind.y * wind.y));
-    const float wx = -wind.x / wnorm;
-    const float wy = -wind.y / wnorm;
+    const float wx = -wind.y / wnorm;
+    const float wy = -wind.x / wnorm;
     const float facing = MAX(0.0f, ux * wx + uy * wy);
     const float slope = MIN(1.0f, gnorm / 0.25f);
     const float windgain = MIN(1.0f, wind.length() / 8.0f);
@@ -3097,7 +3104,7 @@ bool AP_SoarNav::_select_grid_target(Backend &backend, const Location &loc, Loca
     uint8_t tried_count = 0;
     Vector3f wind;
     const bool use_wind_score = guided && _get_wind_vector(backend, wind) && wind.length() >= 1.0f;
-    const float upwind_bearing = use_wind_score ? _wrap_360(_wind_vector_to_bearing_deg(wind) + 180.0f) : 0.0f;
+    const float upwind_bearing = use_wind_score ? _wind_from_bearing_deg(wind) : 0.0f;
 
     while (tried_count < pool_count) {
         int16_t choice_pos = -1;
@@ -3329,7 +3336,7 @@ bool AP_SoarNav::_select_thermal_street_target(Backend &backend, const Location 
         return false;
     }
 
-    const float wind_bearing = _wind_vector_to_bearing_deg(wind);
+    const float wind_bearing = _wind_from_bearing_deg(wind);
     const float street_bearing = _bearing_deg(h2, h1);
     const float angle_diff = fabsf(_wrap_180(street_bearing - wind_bearing));
     if (angle_diff > _street_tolerance_deg.get()) {
@@ -3395,7 +3402,7 @@ bool AP_SoarNav::_select_ridge_target(Backend &backend, const Location &loc, Loc
     }
 
     target = best;
-    target.offset_bearing(_wind_vector_to_bearing_deg(wind), _wp_radius_m.get());
+    target.offset_bearing(_wind_from_bearing_deg(wind), _wp_radius_m.get());
 
     const float tangent_e = -best_uy;
     const float tangent_n = best_ux;
@@ -3908,6 +3915,8 @@ void AP_SoarNav::_clean_hotspots(uint32_t now_ms)
 
 void AP_SoarNav::_update_hotspot_density()
 {
+    const uint32_t now = AP_HAL::millis();
+    const float life_ms = MAX(60.0f, float(_thermal_memory_life_s.get())) * 1000.0f;
     for (uint8_t i = 0; i < MAX_HOTSPOTS; i++) {
         if (!_hotspots[i].valid) {
             continue;
@@ -3919,7 +3928,8 @@ void AP_SoarNav::_update_hotspot_density()
             }
             const float d = _hotspots[i].loc.get_distance(_hotspots[j].loc);
             if (d < _effective_cluster_radius_m) {
-                density += (1.0f - d / MAX(_effective_cluster_radius_m, 1.0f)) * MAX(_hotspots[j].avg_strength_mps, 0.1f);
+                const float age_factor = 1.0f - MIN(1.0f, (now - _hotspots[j].timestamp_ms) / life_ms);
+                density += (1.0f - d / MAX(_effective_cluster_radius_m, 1.0f)) * MAX(_hotspots[j].avg_strength_mps, 0.1f) * age_factor;
             }
         }
         _hotspots[i].density = density;
@@ -3957,7 +3967,7 @@ bool AP_SoarNav::_predict_hotspot_drift(Backend &backend, const Hotspot &hotspot
     const float drift_speed = wind.length() * v_eff_factor * distance_coeff;
     const float drift_dist = drift_speed * age_s;
     const float veer_scale = powf(MIN(1.0f, agl / est_bl_top), 0.7f);
-    const float drift_bearing = _wrap_360(_wind_vector_to_bearing_deg(wind) + 180.0f + 8.0f * veer_scale);
+    const float drift_bearing = _wrap_360(_wind_to_bearing_deg(wind) + 8.0f * veer_scale);
     loc.offset_bearing(drift_bearing, drift_dist);
     return true;
 }
