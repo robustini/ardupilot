@@ -254,31 +254,9 @@ void ModeGuided::clear_soarnav_guided_target_context()
     soarnav_energy_ref_amsl_cm = 0;
 }
 
-bool ModeGuided::soarnav_param_enabled(const char *name) const
-{
-    enum ap_var_type ptype = AP_PARAM_NONE;
-    AP_Param *vp = AP_Param::find(name, &ptype);
-    if (vp == nullptr) {
-        return false;
-    }
-
-    switch (ptype) {
-    case AP_PARAM_INT8:
-        return ((AP_Int8 *)vp)->get() > 0;
-    case AP_PARAM_INT16:
-        return ((AP_Int16 *)vp)->get() > 0;
-    case AP_PARAM_INT32:
-        return ((AP_Int32 *)vp)->get() > 0;
-    case AP_PARAM_FLOAT:
-        return ((AP_Float *)vp)->get() > 0.0f;
-    default:
-        return false;
-    }
-}
-
 bool ModeGuided::soarnav_xy_only_allowed() const
 {
-    if (!soarnav_param_enabled("SNAV_ENABLE") || !soarnav_param_enabled("SOAR_ENABLE")) {
+    if (!plane.g2.soarnav.enabled() || !plane.g2.soaring_controller.is_active()) {
         return false;
     }
 
@@ -287,7 +265,7 @@ bool ModeGuided::soarnav_xy_only_allowed() const
         return false;
     }
 
-    return chan->get_aux_switch_pos() != RC_Channel::AuxSwitchPos::LOW;
+    return chan->get_aux_switch_pos() == RC_Channel::AuxSwitchPos::HIGH;
 }
 
 void ModeGuided::update_soarnav_energy_reference()

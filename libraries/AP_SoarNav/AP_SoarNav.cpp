@@ -385,6 +385,7 @@ void AP_SoarNav::reset()
     _was_in_thermal_mode = false;
     _restored_on_disarm = false;
     _initial_soar_alts_valid = false;
+    _modified_soar_alts = 0;
     _motor_failure_check_active = false;
     _override_reset_done = false;
     _gcone_param_warning_sent = false;
@@ -556,9 +557,9 @@ void AP_SoarNav::stop(Backend &backend)
         return;
     }
     _restore_initial_soar_alts(backend);
-    if (_rtlh.engaged_guided) {
+    if (_rtlh_owns_mode(backend)) {
         backend.set_rtl_mode();
-    } else if (_owns_operating_mode() && !_external_guided_adopted) {
+    } else if (!_rtlh.engaged_guided && _owns_operating_mode() && !_external_guided_adopted) {
         _restore_pilot_mode(backend);
     }
     _reset_runtime(false);
@@ -725,8 +726,8 @@ float AP_SoarNav::_ridge_score_at_loc(Backend &backend, const Location &loc, flo
     const float ux = gx_e / gnorm;
     const float uy = gy_n / gnorm;
     const float wnorm = MAX(1.0e-6f, sqrtf(wind.x * wind.x + wind.y * wind.y));
-    const float wx = -wind.y / wnorm;
-    const float wy = -wind.x / wnorm;
+    const float wx = wind.y / wnorm;
+    const float wy = wind.x / wnorm;
     const float facing = MAX(0.0f, ux * wx + uy * wy);
     const float slope = MIN(1.0f, gnorm / 0.25f);
     const float windgain = MIN(1.0f, wind.length() / 8.0f);
@@ -1188,12 +1189,11 @@ bool AP_SoarNav::_te_probe_immediate_threat(const TerrainProbe &probe, float buf
 
 float AP_SoarNav::_te_roll_limit_rad(Backend &backend) const
 {
-    float roll_limit_cd = 0.0f;
-    if (!backend.param_get_float("LIM_ROLL_CD", roll_limit_cd) || !isfinite(roll_limit_cd) || roll_limit_cd <= 0.0f) {
-        roll_limit_cd = 3000.0f;
+    float roll_limit_deg = 0.0f;
+    if (!backend.param_get_float("ROLL_LIMIT_DEG", roll_limit_deg) || !isfinite(roll_limit_deg) || roll_limit_deg <= 0.0f) {
+        roll_limit_deg = 30.0f;
     }
-    const float roll_limit_deg = constrain_float(roll_limit_cd * 0.01f, 10.0f, 60.0f);
-    return radians(roll_limit_deg);
+    return radians(constrain_float(roll_limit_deg, 1.0f, 60.0f));
 }
 
 float AP_SoarNav::_te_track_or_yaw_deg(Backend &backend) const
@@ -1636,7 +1636,9 @@ void AP_SoarNav::update(Backend &backend)
         _external_guided_override_blocked = false;
         if (running()) {
             _restore_initial_soar_alts(backend);
-            if (_owns_operating_mode() && !_external_guided_adopted) {
+            if (_rtlh_owns_mode(backend)) {
+                backend.set_rtl_mode();
+            } else if (!_rtlh.engaged_guided && _owns_operating_mode() && !_external_guided_adopted) {
                 _restore_pilot_mode(backend);
             }
             _reset_runtime(false);
@@ -1652,7 +1654,9 @@ void AP_SoarNav::update(Backend &backend)
     if (!switch_gate) {
         if (running()) {
             _restore_initial_soar_alts(backend);
-            if (_owns_operating_mode() && !_external_guided_adopted) {
+            if (_rtlh_owns_mode(backend)) {
+                backend.set_rtl_mode();
+            } else if (!_rtlh.engaged_guided && _owns_operating_mode() && !_external_guided_adopted) {
                 _restore_pilot_mode(backend);
             }
             _clear_navigation_state(true);
@@ -1689,7 +1693,9 @@ void AP_SoarNav::update(Backend &backend)
         if (!enabled()) {
             if (running()) {
                 _restore_initial_soar_alts(backend);
-                if (_owns_operating_mode() && !_external_guided_adopted) {
+                if (_rtlh_owns_mode(backend)) {
+                    backend.set_rtl_mode();
+                } else if (!_rtlh.engaged_guided && _owns_operating_mode() && !_external_guided_adopted) {
                     _restore_pilot_mode(backend);
                 }
                 _reset_runtime(false);
@@ -1698,12 +1704,24 @@ void AP_SoarNav::update(Backend &backend)
         }
     }
 
-    const bool rtlh_gate = mode == Backend::ModeNumber::RTL || (_rtlh.engaged_guided && mode == Backend::ModeNumber::GUIDED);
+    const bool rtlh_gate = mode == Backend::ModeNumber::RTL || _rtlh.engaged_guided;
     if (rtlh_gate) {
+        if (mode == Backend::ModeNumber::RTL && _owns_operating_mode()) {
+            const RTLHState rtlh = _rtlh;
+            _restore_initial_soar_alts(backend);
+            _clear_navigation_state(true);
+            _rtlh = rtlh;
+            _manual_override_active = false;
+            _state = State::IDLE;
+            _last_announced_state = State::ERROR;
+        }
         _update_area(backend, loc, _grid_force_reinit);
         _grid_force_reinit = false;
         _update_rtlh(backend, loc);
+        return;
     }
+    _rtlh.active = false;
+    _rtlh.last_mode = mode;
 
     if (!_runtime_gate_open(backend)) {
         if (_external_guided_adopted) {
@@ -2052,9 +2070,9 @@ void AP_SoarNav::_handle_navigating(Backend &backend, const Location &loc, bool 
                 target = _reposition_resume_target;
                 source = _reposition_resume_source[0] != 0 ? _reposition_resume_source : "Resume";
                 _reposition_resume_valid = false;
-                _reposition_resume_source[0] = 0;
                 if (_clamp_inside_area(loc, target) && _terrain_candidate_allowed(backend, loc, target, source)) {
                     if (_send_target(backend, target, source, true)) {
+                        _reposition_resume_source[0] = 0;
                         _next_target_search_ms = 0;
                         return;
                     }
@@ -3459,7 +3477,7 @@ bool AP_SoarNav::_send_target(Backend &backend, const Location &loc_in, const ch
     }
 
     const bool terrain_source = _source_is_terrain_evasion(new_source);
-    const bool target_changed = _target_key_changed(loc, terrain_source);
+    const bool target_changed = _target_key_changed(loc);
     const bool new_waypoint = !target_was_valid || target_changed || source_changed;
     const bool horizontal_target_changed = !_last_sent_valid ||
                                            labs(loc.lat - _last_sent_target.lat) > 3 ||
@@ -3500,10 +3518,10 @@ bool AP_SoarNav::_send_target(Backend &backend, const Location &loc_in, const ch
     if (new_waypoint) {
         _initial_distance_to_wp_m = _distance_to_wp_m;
         _reroute_check_armed = strncmp(_target_source, "Terrain Evasion", 16) != 0;
+        _reset_progress_monitor(GUIDED_PROGRESS_ARM_DELAY_MS);
+        _waypoint_start_ms = now;
     }
     _log_target(backend, loc, _target_source);
-    _reset_progress_monitor(GUIDED_PROGRESS_ARM_DELAY_MS);
-    _waypoint_start_ms = now;
     return true;
 }
 
@@ -3522,7 +3540,7 @@ void AP_SoarNav::_make_guided_location(Backend &backend, Location &loc) const
     loc.change_alt_frame(Location::AltFrame::ABOVE_HOME);
 }
 
-bool AP_SoarNav::_target_key_changed(const Location &loc, bool horizontal_only) const
+bool AP_SoarNav::_target_key_changed(const Location &loc) const
 {
     if (!_last_sent_valid) {
         return true;
@@ -3530,10 +3548,7 @@ bool AP_SoarNav::_target_key_changed(const Location &loc, bool horizontal_only) 
     if (labs(loc.lat - _last_sent_target.lat) > 3 || labs(loc.lng - _last_sent_target.lng) > 3) {
         return true;
     }
-    if (horizontal_only) {
-        return false;
-    }
-    return labs(loc.alt - _last_sent_target.alt) > 50;
+    return false;
 }
 
 bool AP_SoarNav::_source_is_terrain_evasion(const char *source) const
@@ -3765,8 +3780,9 @@ void AP_SoarNav::_finish_thermal(Backend &backend, const Location &loc, bool wea
     const float uncertainty = max_s < 3.0f ? constrain_float((3.0f - max_s) * 25.0f, 0.0f, 50.0f) : 0.0f;
     const float necessity = (1.0f - _filtered_alt_factor) * _necessity_weight.get();
     const float retry_score = uncertainty + necessity;
+    const bool can_reengage = backend.mode_number() == Backend::ModeNumber::GUIDED;
     if (max_s < _thermal_memory_min_strength.get()) {
-        if (weak_exit && retry_score >= _retry_threshold.get() && _point_in_area(_thermal.best_loc)) {
+        if (can_reengage && weak_exit && retry_score >= _retry_threshold.get() && _point_in_area(_thermal.best_loc)) {
             _begin_reengage(backend, loc, _thermal.best_loc);
         }
         _thermal.active = false;
@@ -3856,9 +3872,9 @@ void AP_SoarNav::_finish_thermal(Backend &backend, const Location &loc, bool wea
         }
     }
 
-    if (saved && retry_score >= _retry_threshold.get()) {
+    if (can_reengage && saved && retry_score >= _retry_threshold.get()) {
         _begin_reengage(backend, loc, save_loc);
-    } else if (weak_exit && !saved && retry_score >= _retry_threshold.get()) {
+    } else if (can_reengage && weak_exit && !saved && retry_score >= _retry_threshold.get()) {
         _begin_reengage(backend, loc, save_loc);
     }
 
@@ -4305,15 +4321,22 @@ void AP_SoarNav::_update_energy(Backend &backend, const Location &loc)
 {
     const uint32_t now = AP_HAL::millis();
     const float current_alt = _alt_above_home_m(loc);
-    float trend = 0.0f;
-    if (_last_alt_timestamp_ms != 0) {
+    if (_last_alt_timestamp_ms == 0) {
+        _last_alt_m = current_alt;
+        _last_alt_timestamp_ms = now;
+    } else if (now - _last_alt_timestamp_ms >= 500U) {
         const float dt = (now - _last_alt_timestamp_ms) * 0.001f;
-        if (dt > 0.5f) {
-            trend = (current_alt - _last_alt_m) / dt;
+        const float trend = (current_alt - _last_alt_m) / dt;
+        _last_alt_m = current_alt;
+        _last_alt_timestamp_ms = now;
+        if (trend < -0.3f) {
+            if (_negative_trend_start_ms == 0) {
+                _negative_trend_start_ms = now;
+            }
+        } else {
+            _negative_trend_start_ms = 0;
         }
     }
-    _last_alt_m = current_alt;
-    _last_alt_timestamp_ms = now;
 
     const float raw_factor = _energy_factor(backend, loc);
     if (_energy_state_transition_ms == 0) {
@@ -4334,15 +4357,8 @@ void AP_SoarNav::_update_energy(Backend &backend, const Location &loc)
         new_state = EnergyState::CRITICAL;
     }
 
-    if (trend < -0.3f) {
-        if (_negative_trend_start_ms == 0) {
-            _negative_trend_start_ms = now;
-        }
-        if (now - _negative_trend_start_ms >= 3000U && new_state != EnergyState::CRITICAL) {
-            new_state = EnergyState::CRITICAL;
-        }
-    } else {
-        _negative_trend_start_ms = 0;
+    if (_negative_trend_start_ms != 0 && now - _negative_trend_start_ms >= 3000U) {
+        new_state = EnergyState::CRITICAL;
     }
 
     _energy_state = new_state;
@@ -4365,9 +4381,21 @@ void AP_SoarNav::_restore_initial_soar_alts(Backend &backend)
     if (!_initial_soar_alts_valid) {
         return;
     }
-    backend.param_set_float("SOAR_ALT_MIN", _initial_soar_alt_min_m);
-    backend.param_set_float("SOAR_ALT_MAX", _initial_soar_alt_max_m);
-    backend.param_set_float("SOAR_ALT_CUTOFF", _initial_soar_alt_cutoff_m);
+    if ((_modified_soar_alts & SOAR_ALT_MIN_MODIFIED) != 0 &&
+        backend.param_set_float("SOAR_ALT_MIN", _initial_soar_alt_min_m)) {
+        _modified_soar_alts &= ~SOAR_ALT_MIN_MODIFIED;
+    }
+    if ((_modified_soar_alts & SOAR_ALT_CUTOFF_MODIFIED) != 0 &&
+        backend.param_set_float("SOAR_ALT_CUTOFF", _initial_soar_alt_cutoff_m)) {
+        _modified_soar_alts &= ~SOAR_ALT_CUTOFF_MODIFIED;
+    }
+    if ((_modified_soar_alts & SOAR_ALT_MAX_MODIFIED) != 0 &&
+        backend.param_set_float("SOAR_ALT_MAX", _initial_soar_alt_max_m)) {
+        _modified_soar_alts &= ~SOAR_ALT_MAX_MODIFIED;
+    }
+    if (_modified_soar_alts == 0) {
+        _initial_soar_alts_valid = false;
+    }
 }
 
 void AP_SoarNav::_update_dynamic_soar_alt(Backend &backend, const Location &loc)
@@ -4398,12 +4426,14 @@ void AP_SoarNav::_update_dynamic_soar_alt(Backend &backend, const Location &loc)
 
     float polar_b = 0.0f;
     float polar_cd0 = 0.0f;
+    float polar_k = 0.0f;
     float best_glide_airspeed = 0.0f;
     if (!backend.param_get_float("SOAR_POLAR_B", polar_b) ||
         !backend.param_get_float("SOAR_POLAR_CD0", polar_cd0) ||
+        !backend.param_get_float("SOAR_POLAR_K", polar_k) ||
         !backend.param_get_float("AIRSPEED_CRUISE", best_glide_airspeed) ||
-        polar_b <= 0.0f || polar_cd0 <= 0.0f || best_glide_airspeed <= 0.0f ||
-        !isfinite(polar_b) || !isfinite(polar_cd0) || !isfinite(best_glide_airspeed)) {
+        polar_b <= 0.0f || polar_cd0 <= 0.0f || polar_k <= 0.0f || best_glide_airspeed <= 0.0f ||
+        !isfinite(polar_b) || !isfinite(polar_cd0) || !isfinite(polar_k) || !isfinite(best_glide_airspeed)) {
         if (!_gcone_param_warning_sent && _log_level.get() > 0) {
             backend.send_text(MAV_SEVERITY_WARNING, "SoarNav: Glide Cone disabled, missing polar/airspeed params");
             _gcone_param_warning_sent = true;
@@ -4411,8 +4441,8 @@ void AP_SoarNav::_update_dynamic_soar_alt(Backend &backend, const Location &loc)
         return;
     }
 
-    const float efficiency_max = 1.0f / sqrtf(4.0f * polar_cd0 * polar_b);
-    if (!isfinite(efficiency_max) || efficiency_max <= 0.0f) {
+    const float eas2tas = backend.eas2tas();
+    if (!isfinite(eas2tas) || eas2tas <= 0.0f) {
         return;
     }
 
@@ -4424,20 +4454,25 @@ void AP_SoarNav::_update_dynamic_soar_alt(Backend &backend, const Location &loc)
     const float current_alt = _alt_above_home_m(loc);
     Vector2f vec_to_home = loc.get_distance_NE(home);
     float wind_comp = 0.0f;
+    float wind_cross = 0.0f;
     Vector3f wind;
     if (backend.wind_vector(wind) && vec_to_home.length() > 1.0f) {
         wind_comp = (vec_to_home.x * wind.x + vec_to_home.y * wind.y) / vec_to_home.length();
-        if (!isfinite(wind_comp)) {
+        wind_cross = (vec_to_home.x * wind.y - vec_to_home.y * wind.x) / vec_to_home.length();
+        if (!isfinite(wind_comp) || !isfinite(wind_cross)) {
             wind_comp = 0.0f;
+            wind_cross = 0.0f;
         }
     }
 
-    float gs_to_home = best_glide_airspeed + wind_comp;
+    const float tas = best_glide_airspeed * eas2tas;
+    float gs_to_home = fabsf(wind_cross) < tas ? sqrtf(tas * tas - wind_cross * wind_cross) + wind_comp : 0.0f;
     if (!isfinite(gs_to_home) || gs_to_home <= 0.0f) {
         gs_to_home = 0.1f;
     }
 
-    const float sink_best = best_glide_airspeed / efficiency_max;
+    const float cl = polar_k / (best_glide_airspeed * best_glide_airspeed);
+    const float sink_best = tas * (polar_cd0 / cl + polar_b * cl);
     if (!isfinite(sink_best) || sink_best <= 0.0f) {
         return;
     }
@@ -4533,14 +4568,17 @@ void AP_SoarNav::_update_dynamic_soar_alt(Backend &backend, const Location &loc)
     }
 
     bool changed = false;
-    if (fabsf(current_min - target_min) > 0.5f) {
-        changed |= backend.param_set_float("SOAR_ALT_MIN", target_min);
+    if (fabsf(current_min - target_min) > 0.5f && backend.param_set_float("SOAR_ALT_MIN", target_min)) {
+        _modified_soar_alts |= SOAR_ALT_MIN_MODIFIED;
+        changed = true;
     }
-    if ((mode == 1 || mode == 2) && fabsf(current_cutoff - target_cutoff) > 0.5f) {
-        changed |= backend.param_set_float("SOAR_ALT_CUTOFF", target_cutoff);
+    if ((mode == 1 || mode == 2) && fabsf(current_cutoff - target_cutoff) > 0.5f && backend.param_set_float("SOAR_ALT_CUTOFF", target_cutoff)) {
+        _modified_soar_alts |= SOAR_ALT_CUTOFF_MODIFIED;
+        changed = true;
     }
-    if ((mode == 1 || mode == 2) && fabsf(current_max - target_max) > 0.5f) {
-        changed |= backend.param_set_float("SOAR_ALT_MAX", target_max);
+    if ((mode == 1 || mode == 2) && fabsf(current_max - target_max) > 0.5f && backend.param_set_float("SOAR_ALT_MAX", target_max)) {
+        _modified_soar_alts |= SOAR_ALT_MAX_MODIFIED;
+        changed = true;
     }
 
     if (changed && _log_level.get() > 0) {
@@ -7693,13 +7731,18 @@ void AP_SoarNav::_update_polar_learning(Backend &backend, const Location &loc)
     if (!backend.velocity_ned(vned)) {
         return;
     }
-    Vector3f wind;
-    if (!backend.wind_vector(wind)) {
-        wind.zero();
+    const float eas2tas = backend.eas2tas();
+    if (!isfinite(eas2tas) || eas2tas <= 0.0f) {
+        return;
     }
-    const float va_n = vned.x - wind.x;
-    const float va_e = vned.y - wind.y;
-    const float v = sqrtf(va_n * va_n + va_e * va_e);
+    float v = 0.0f;
+    if (!backend.airspeed_estimate_mps(v)) {
+        Vector3f wind;
+        if (!backend.wind_vector(wind)) {
+            wind.zero();
+        }
+        v = (vned.xy() - wind.xy()).length() / eas2tas;
+    }
     if (!isfinite(v) || v <= 8.0f) {
         return;
     }
@@ -7718,7 +7761,6 @@ void AP_SoarNav::_update_polar_learning(Backend &backend, const Location &loc)
 
     if (dt_ms > 0) {
         const float k = 1.0f - expf(-float(dt_ms) / 60000.0f);
-        _polar.sink_bias += k * (sink_raw - _polar.sink_bias);
         if (_polar.v_ema <= 0.0f) {
             _polar.v_ema = v;
         }
@@ -7728,7 +7770,7 @@ void AP_SoarNav::_update_polar_learning(Backend &backend, const Location &loc)
         _polar.v_ema += k * (v - _polar.v_ema);
         _polar.v2_ema += k * (v * v - _polar.v2_ema);
     }
-    const float sink = sink_raw - _polar.sink_bias;
+    const float sink = sink_raw / eas2tas;
 
     if (dt_ms > 0) {
         const float decay = expf(-float(dt_ms) / 120000.0f);
@@ -7771,13 +7813,13 @@ void AP_SoarNav::_update_polar_learning(Backend &backend, const Location &loc)
 
     float cd0 = 0.0f;
     float bb = 0.0f;
-    float vc = 15.0f;
-    if (!backend.param_get_float("SOAR_POLAR_CD0", cd0) || !backend.param_get_float("SOAR_POLAR_B", bb)) {
+    float polar_k = 0.0f;
+    if (!backend.param_get_float("SOAR_POLAR_CD0", cd0) ||
+        !backend.param_get_float("SOAR_POLAR_B", bb) ||
+        !backend.param_get_float("SOAR_POLAR_K", polar_k) ||
+        !isfinite(cd0) || !isfinite(bb) || !isfinite(polar_k) ||
+        cd0 <= 0.0f || bb <= 0.0f || polar_k <= 0.0f) {
         return;
-    }
-    backend.param_get_float("AIRSPEED_CRUISE", vc);
-    if (vc <= 0.0f || !isfinite(vc)) {
-        vc = 15.0f;
     }
     if (_polar.last_saved_cd0 <= 0.0f) {
         _polar.last_saved_cd0 = cd0;
@@ -7788,77 +7830,37 @@ void AP_SoarNav::_update_polar_learning(Backend &backend, const Location &loc)
 
     const float v_var = MAX(0.0f, _polar.v2_ema - _polar.v_ema * _polar.v_ema);
     const float v_std = sqrtf(v_var);
-    float new_cd0 = cd0;
-    float new_b = bb;
-    bool solution_valid = false;
-
     if (v_std < 0.8f) {
-        const float sink_model = (cd0 * v * v + bb) / v;
-        if (!isfinite(sink_model) || sink_model <= 0.0f) {
-            return;
-        }
-        float s_mag_inst = sink / sink_model;
-        s_mag_inst = constrain_float(s_mag_inst, 0.90f, 1.10f);
-        _polar.s_mag_log_ema += 0.2f * (logf(s_mag_inst) - _polar.s_mag_log_ema);
-        const float s_mag = expf(_polar.s_mag_log_ema);
-        new_cd0 = cd0 * s_mag;
-        new_b = bb * s_mag;
-        new_cd0 = _round_to(constrain_float(new_cd0, 0.005f, 0.500f), 0.0001f);
-        new_b = _round_to(constrain_float(new_b, 0.005f, 0.060f), 0.0001f);
-        solution_valid = true;
-    } else {
-        const float det = _polar.s11 * _polar.s22 - _polar.s12 * _polar.s12;
-        if (!isfinite(det) || det <= 1.0e-9f) {
-            return;
-        }
-        const float a_est = (_polar.y1 * _polar.s22 - _polar.y2 * _polar.s12) / det;
-        const float b_est = (_polar.y2 * _polar.s11 - _polar.y1 * _polar.s12) / det;
-        if (!isfinite(a_est) || !isfinite(b_est) || a_est <= 0.0f || b_est <= 0.0f) {
-            return;
-        }
-        const float pred = a_est * v * v * v + b_est / v;
-        const float e = fabsf(sink - pred);
-        if (!_polar.err_ema_valid) {
-            _polar.err_ema = e;
-            _polar.err_ema_valid = true;
-        } else {
-            _polar.err_ema = 0.9f * _polar.err_ema + 0.1f * e;
-        }
-        if (_polar.err_ema > 0.6f) {
-            return;
-        }
-        const float r_est = b_est / a_est;
-        const float r_cur = bb / cd0;
-        if (!isfinite(r_est) || !isfinite(r_cur) || r_est <= 0.0f || r_cur <= 0.0f) {
-            return;
-        }
-        float h = sqrtf(r_est / r_cur);
-        h = constrain_float(h, 0.90f, 1.10f);
-        const float cd0_shape = cd0 / h;
-        const float b_shape = bb * h;
-        const float denom = a_est * vc * vc + b_est / (vc * vc);
-        if (!isfinite(denom) || denom <= 0.0f) {
-            return;
-        }
-        const float eff = 1.0f / denom;
-        if (!isfinite(eff) || eff <= 0.0f) {
-            return;
-        }
-        const float target_prod = 1.0f / (4.0f * eff * eff);
-        const float prod_shape = cd0_shape * b_shape;
-        if (!isfinite(target_prod) || !isfinite(prod_shape) || target_prod <= 0.0f || prod_shape <= 0.0f) {
-            return;
-        }
-        float s_prod = sqrtf(target_prod / prod_shape);
-        s_prod = constrain_float(s_prod, 0.90f, 1.15f);
-        new_cd0 = _round_to(constrain_float(cd0_shape * s_prod, 0.005f, 0.500f), 0.001f);
-        new_b = _round_to(constrain_float(b_shape * s_prod, 0.005f, 0.060f), 0.001f);
-        solution_valid = true;
-    }
-
-    if (!solution_valid) {
+        _polar.stable_count = 0;
         return;
     }
+    const float det = _polar.s11 * _polar.s22 - _polar.s12 * _polar.s12;
+    if (!isfinite(det) || det <= 1.0e-9f) {
+        return;
+    }
+    const float a_est = (_polar.y1 * _polar.s22 - _polar.y2 * _polar.s12) / det;
+    const float b_est = (_polar.y2 * _polar.s11 - _polar.y1 * _polar.s12) / det;
+    if (!isfinite(a_est) || !isfinite(b_est) || a_est <= 0.0f || b_est <= 0.0f) {
+        return;
+    }
+    const float pred = a_est * v * v * v + b_est / v;
+    const float e = fabsf(sink - pred) * eas2tas;
+    if (!_polar.err_ema_valid) {
+        _polar.err_ema = e;
+        _polar.err_ema_valid = true;
+    } else {
+        _polar.err_ema = 0.9f * _polar.err_ema + 0.1f * e;
+    }
+    if (_polar.err_ema > 0.6f) {
+        return;
+    }
+    // Fit sea-level sink against EAS so the drag coefficients do not absorb air density.
+    const float cd0_est = a_est * polar_k;
+    const float b_est_native = b_est / polar_k;
+    const float cd0_step = constrain_float(cd0_est, cd0 * 0.90f, cd0 * 1.15f);
+    const float b_step = constrain_float(b_est_native, bb * 0.90f, bb * 1.15f);
+    const float new_cd0 = _round_to(constrain_float(cd0_step, 0.005f, 0.500f), 0.0001f);
+    const float new_b = _round_to(constrain_float(b_step, 0.005f, 0.050f), 0.0001f);
     const bool first_commit = (_polar.last_commit_ms == 0);
     const bool rate_ok = first_commit || (now - _polar.last_commit_ms >= 90000U);
     const float rel_cd0 = _polar.last_saved_cd0 > 0.0f ? fabsf(new_cd0 - _polar.last_saved_cd0) / _polar.last_saved_cd0 : 1.0f;
@@ -7871,8 +7873,11 @@ void AP_SoarNav::_update_polar_learning(Backend &backend, const Location &loc)
         _polar.stable_count = 0;
     }
     if (_polar.stable_count >= 3) {
-        backend.param_set_float("SOAR_POLAR_CD0", new_cd0);
-        backend.param_set_float("SOAR_POLAR_B", new_b);
+        if (!backend.param_set_float("SOAR_POLAR_CD0", new_cd0) ||
+            !backend.param_set_float("SOAR_POLAR_B", new_b)) {
+            _polar.stable_count = 0;
+            return;
+        }
         _polar.last_commit_ms = now;
         _polar.last_saved_cd0 = new_cd0;
         _polar.last_saved_b = new_b;
@@ -7971,20 +7976,51 @@ void AP_SoarNav::_update_motor_failure(Backend &backend, const Location &loc)
     }
 }
 
+bool AP_SoarNav::_rtlh_owns_mode(Backend &backend) const
+{
+    if (!_rtlh.engaged_guided) {
+        return false;
+    }
+    const Backend::ModeNumber mode = backend.mode_number();
+    if (mode == Backend::ModeNumber::GUIDED) {
+        return _rtlh.last_mode != Backend::ModeNumber::THERMAL || backend.mode_change_is_soaring();
+    }
+    return mode == Backend::ModeNumber::THERMAL &&
+           backend.previous_mode_number() == Backend::ModeNumber::GUIDED &&
+           backend.mode_change_is_soaring();
+}
+
+bool AP_SoarNav::_send_rtlh_home(Backend &backend, const Location &home)
+{
+    if (!backend.set_guided_target(home)) {
+        return false;
+    }
+    _target = home;
+    _target_valid = true;
+    _last_sent_target = home;
+    _last_sent_valid = true;
+    _last_target_sent_ms = AP_HAL::millis();
+    strncpy(_target_source, "RTL Home", sizeof(_target_source));
+    _log_target(backend, home, _target_source);
+    return true;
+}
+
 void AP_SoarNav::_update_rtlh(Backend &backend, const Location &loc)
 {
     const Backend::ModeNumber mode = backend.mode_number();
     const uint32_t now = AP_HAL::millis();
+    const bool thermal_exit = _rtlh.last_mode == Backend::ModeNumber::THERMAL && mode == Backend::ModeNumber::GUIDED;
+    const bool owns_mode = _rtlh_owns_mode(backend);
 
-    if (_rtlh.last_mode == Backend::ModeNumber::RTL && mode != Backend::ModeNumber::RTL && mode != Backend::ModeNumber::GUIDED) {
-        _rtlh.active = false;
-        _rtlh.engaged_guided = false;
+    if ((_rtlh.engaged_guided && !owns_mode) ||
+        (_rtlh.last_mode == Backend::ModeNumber::RTL && mode != Backend::ModeNumber::RTL &&
+         mode != Backend::ModeNumber::GUIDED && !owns_mode)) {
+        _clear_navigation_state(true);
         _rtlh.abort_until_next_rtl = true;
-    }
-
-    if (_rtlh.engaged_guided && mode != Backend::ModeNumber::GUIDED) {
-        _rtlh.abort_until_next_rtl = true;
-        _rtlh.engaged_guided = false;
+        _rtlh.last_mode = mode;
+        _state = State::IDLE;
+        _last_announced_state = State::ERROR;
+        return;
     }
 
     if (_rtlh.last_mode != Backend::ModeNumber::RTL && mode == Backend::ModeNumber::RTL) {
@@ -7997,12 +8033,16 @@ void AP_SoarNav::_update_rtlh(Backend &backend, const Location &loc)
         return;
     }
 
-    if (!_using_rally_points) {
-        if (_rtlh.engaged_guided && mode == Backend::ModeNumber::GUIDED) {
-            backend.set_rtl_mode();
-        }
+    if (!backend.is_flying()) {
         _rtlh.active = false;
-        _rtlh.engaged_guided = false;
+        return;
+    }
+
+    if (!_using_rally_points) {
+        if (owns_mode && !backend.set_rtl_mode()) {
+            return;
+        }
+        _clear_navigation_state(true);
         return;
     }
 
@@ -8017,15 +8057,36 @@ void AP_SoarNav::_update_rtlh(Backend &backend, const Location &loc)
     }
 
     const float d = loc.get_distance(home);
-    if (_rtlh.engaged_guided && mode == Backend::ModeNumber::GUIDED) {
+    if (_rtlh.engaged_guided) {
+        Location target;
+        const char *source = "Terrain Evasion";
+        if (_terrain_evasion_update(backend, loc, target, source)) {
+            if (mode == Backend::ModeNumber::THERMAL && !backend.set_guided_mode()) {
+                return;
+            }
+            _rtlh.last_mode = backend.mode_number();
+            if (_source_is_terrain_evasion(source)) {
+                if (!_send_target(backend, target, source, true)) {
+                    _te_clear_state(false);
+                }
+            } else {
+                _send_rtlh_home(backend, home);
+            }
+            return;
+        }
+        if (_terrain.state != TerrainState::IDLE || mode == Backend::ModeNumber::THERMAL) {
+            return;
+        }
         if (d <= rtl_radius) {
             backend.send_text(MAV_SEVERITY_INFO, "SoarNav: RTL Override: In home area. Resuming RTL.");
             if (backend.set_rtl_mode()) {
+                _clear_navigation_state(true);
                 _rtlh.abort_until_next_rtl = true;
-                _rtlh.engaged_guided = false;
-                _rtlh.active = false;
-                _last_sent_valid = false;
+                _rtlh.last_mode = Backend::ModeNumber::RTL;
             }
+        } else if (thermal_exit || !_last_sent_valid || _source_is_terrain_evasion(_target_source) ||
+                   labs(home.lat - _target.lat) > 3 || labs(home.lng - _target.lng) > 3) {
+            _send_rtlh_home(backend, home);
         }
         return;
     }
@@ -8063,9 +8124,14 @@ void AP_SoarNav::_update_rtlh(Backend &backend, const Location &loc)
     backend.param_get_float("RTL_ALTITUDE", rtl_alt_m);
     home.set_alt_cm(int32_t(rtl_alt_m * 100.0f), Location::AltFrame::ABOVE_HOME);
     backend.send_text(MAV_SEVERITY_INFO, "SoarNav: RTL Stall: Force direct Home route @%.0fm", (double)d);
-    if (backend.set_guided_mode() && backend.set_guided_target(home)) {
-        _rtlh.engaged_guided = true;
-        _rtlh.t0_ms = now;
+    _rtlh.t0_ms = now;
+    _rtlh.d0_m = d;
+    if (backend.set_guided_mode()) {
+        if (_send_rtlh_home(backend, home)) {
+            _rtlh.engaged_guided = true;
+        } else {
+            backend.set_rtl_mode();
+        }
     }
 }
 

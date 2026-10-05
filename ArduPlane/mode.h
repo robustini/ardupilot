@@ -428,7 +428,6 @@ private:
     void prepare_soarnav_target_altitude(Location &loc);
     void set_soarnav_guided_target_context(const Location &loc, bool terrain_evasion_target);
     void clear_soarnav_guided_target_context();
-    bool soarnav_param_enabled(const char *name) const;
     bool soarnav_xy_only_allowed() const;
     void update_soarnav_energy_target_altitude();
 #endif

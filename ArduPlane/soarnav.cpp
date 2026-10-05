@@ -17,6 +17,20 @@ public:
     ModeNumber mode_number() const override { return plane.control_mode != nullptr ? convert_mode(plane.control_mode->mode_number()) : ModeNumber::UNKNOWN; }
     ModeNumber previous_mode_number() const override { return plane.previous_mode != nullptr ? convert_mode(plane.previous_mode->mode_number()) : ModeNumber::UNKNOWN; }
 
+    bool mode_change_is_soaring() const override
+    {
+        switch (plane.get_control_mode_reason()) {
+        case ModeReason::SOARING_THERMAL_DETECTED:
+        case ModeReason::SOARING_THERMAL_ESTIMATE_DETERIORATED:
+        case ModeReason::SOARING_ALT_TOO_HIGH:
+        case ModeReason::SOARING_ALT_TOO_LOW:
+        case ModeReason::SOARING_DRIFT_EXCEEDED:
+            return true;
+        default:
+            return false;
+        }
+    }
+
     bool set_guided_mode() override
     {
 #if HAL_QUADPLANE_ENABLED
@@ -157,6 +171,11 @@ public:
     {
         AP_AHRS::AirspeedEstimateType type = AP_AHRS::AirspeedEstimateType::NO_NEW_ESTIMATE;
         return plane.ahrs.airspeed_EAS(airspeed, type);
+    }
+
+    float eas2tas() const override
+    {
+        return plane.ahrs.get_EAS2TAS();
     }
 
     float throttle_percent() const override

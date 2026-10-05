@@ -44,6 +44,7 @@ public:
         virtual bool is_flying() const = 0;
         virtual ModeNumber mode_number() const = 0;
         virtual ModeNumber previous_mode_number() const = 0;
+        virtual bool mode_change_is_soaring() const = 0;
         virtual bool set_guided_mode() = 0;
         virtual bool set_rtl_mode() = 0;
         virtual bool set_mode(ModeNumber mode) = 0;
@@ -59,6 +60,7 @@ public:
         virtual float ground_speed_mps() const = 0;
         virtual float climb_rate_mps() const = 0;
         virtual bool airspeed_estimate_mps(float &airspeed) const = 0;
+        virtual float eas2tas() const = 0;
         virtual float throttle_percent() const = 0;
         virtual bool motor_running() const = 0;
         virtual bool rpm_ok(float min_rpm) const = 0;
@@ -344,12 +346,10 @@ private:
         float n;
         float last_saved_cd0;
         float last_saved_b;
-        float sink_bias;
         float err_ema;
         bool err_ema_valid;
         float v_ema;
         float v2_ema;
-        float s_mag_log_ema;
         uint16_t good_samples;
         uint8_t stable_count;
         uint32_t last_debug_ms;
@@ -369,6 +369,9 @@ private:
     static constexpr uint8_t MAX_HOTSPOTS = 10;
     static constexpr uint8_t MAX_POLYGON_POINTS = 32;
     static constexpr uint8_t MAX_STREET_HOTSPOTS = 4;
+    static constexpr uint8_t SOAR_ALT_MIN_MODIFIED = 1U << 0;
+    static constexpr uint8_t SOAR_ALT_CUTOFF_MODIFIED = 1U << 1;
+    static constexpr uint8_t SOAR_ALT_MAX_MODIFIED = 1U << 2;
     static constexpr float MIN_CELL_M = 50.0f;
     static constexpr uint32_t MAIN_LOOP_FAST_MS = 100;
     static constexpr uint32_t PARAM_CHECK_MS = 2000;
@@ -502,6 +505,7 @@ private:
     bool _was_in_thermal_mode;
     bool _restored_on_disarm;
     bool _initial_soar_alts_valid;
+    uint8_t _modified_soar_alts;
     bool _motor_failure_check_active;
     bool _override_reset_done;
     bool _gcone_param_warning_sent;
@@ -743,7 +747,7 @@ private:
     bool _select_random_fallback(Backend &backend, const Location &loc, Location &target, const char *&source);
     bool _send_target(Backend &backend, const Location &loc, const char *source, bool force);
     void _make_guided_location(Backend &backend, Location &loc) const;
-    bool _target_key_changed(const Location &loc, bool horizontal_only = false) const;
+    bool _target_key_changed(const Location &loc) const;
     bool _source_is_terrain_evasion(const char *source) const;
     bool _target_log_suppresses_cells(const char *source) const;
     bool _target_log_is_duplicate(const Location &loc, const char *source, uint32_t now_ms) const;
@@ -849,6 +853,8 @@ private:
     void _update_polar_learning(Backend &backend, const Location &loc);
     void _update_motor_failure(Backend &backend, const Location &loc);
     void _update_rtlh(Backend &backend, const Location &loc);
+    bool _rtlh_owns_mode(Backend &backend) const;
+    bool _send_rtlh_home(Backend &backend, const Location &home);
     float _home_distance_m(Backend &backend, const Location &loc) const;
     float _alt_amsl_m(const Location &loc) const;
     float _alt_above_home_m(const Location &loc) const;

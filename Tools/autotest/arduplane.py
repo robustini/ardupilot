@@ -9252,6 +9252,14 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.wait_text("SoarNav: Auto-start", timeout=30, check_context=True)
             self.wait_text("SoarNav: State NAV", timeout=30, check_context=True)
             self.wait_mode("GUIDED", timeout=30)
+            self.context_clear_collection("STATUSTEXT")
+            self.set_rc(7, 1500)
+            self.wait_mode("CRUISE", timeout=10)
+            self.delay_sim_time(6, reason="verify active SoarNav releases control with SOARING middle")
+            if not self.mode_is("CRUISE"):
+                raise NotAchievedException("SoarNav did not remain in CRUISE with SOARING switch in middle position")
+            if self.statustext_in_collections("SoarNav: State NAV", regex=False) is not None:
+                raise NotAchievedException("SoarNav restarted navigation with SOARING switch in middle position")
         except Exception as e:
             self.print_exception_caught(e)
             ex = e
@@ -9325,7 +9333,11 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.upload_rally_points_from_locations(self._snav_rally_square_locations())
             self._snav_start_active_navigation()
             self.wait_text(r"SoarNav: Rally A=.*RP=4", timeout=60, regex=True, check_context=True)
-            self.wait_text(r"SoarNav: Grid [0-9]+x[0-9]+, cell [0-9]+m, valid [1-9][0-9]*/[1-9][0-9]*", timeout=60, regex=True, check_context=True)
+            self.wait_text(
+                r"SoarNav: Grid [0-9]+x[0-9]+, cell [0-9]+m, valid [1-9][0-9]*/[1-9][0-9]*",
+                timeout=60,
+                regex=True,
+                check_context=True)
             if self.statustext_in_collections("No Rally polygon") is not None:
                 raise NotAchievedException("SoarNav rejected a valid Rally polygon")
             self._snav_wait_any_normal_target()
@@ -9491,6 +9503,76 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
                 raise NotAchievedException("SoarNav RTL helper left vehicle in unexpected mode %s" % mode)
             if self.statustext_in_collections("SoarNav: RTL Stall", regex=False) is not None:
                 self.wait_mode("GUIDED", timeout=10)
+        except Exception as e:  # noqa: BLE001
+            self.print_exception_caught(e)
+            ex = e
+        self._snav_cleanup(ex)
+
+    def SoarNavRTLHomeThermal(self):
+        """Test RTL helper resumes RTL after a native automatic thermal detour"""
+        ex = None
+        self._snav_common_start(params={
+            "SNAV_RADIUS_M": 0,
+            "SOAR_ALT_MIN": 20,
+            "SOAR_ALT_CUTOFF": 80,
+            "SOAR_ALT_MAX": 2000,
+            "SOAR_MIN_CRSE_S": 0,
+            "SOAR_MIN_THML_S": 0,
+            "SOAR_VSPEED": 0.7,
+            "RTL_RADIUS": 50,
+        })
+        try:
+            self.wait_ready_to_arm()
+            self.upload_rally_points_from_locations(self._snav_rally_square_locations(size_m=2000))
+            self._snav_start_active_navigation(timeout=60)
+            self.wait_distance_to_home(800, 2500, timeout=150)
+            self.context_clear_collection("STATUSTEXT")
+            self.change_mode("RTL")
+            self.wait_text("SoarNav: RTL Stall", timeout=60, check_context=True)
+            self.wait_mode("GUIDED", timeout=10)
+            self.set_parameters({"SIM_WIND_SPD": 6, "SIM_WIND_DIR_Z": 90, "SIM_WIND_T": 1})
+            self.wait_text("Soaring: Thermal detected", timeout=60, check_context=True)
+            self.wait_mode("THERMAL", timeout=10)
+            self.set_parameters({"SIM_WIND_SPD": 0, "SOAR_VSPEED": 20})
+            self.wait_mode("GUIDED", timeout=90)
+            self.wait_distance_to_home(0, 40, timeout=240)
+            self.wait_mode("RTL", timeout=10)
+        except Exception as e:  # noqa: BLE001
+            self.print_exception_caught(e)
+            ex = e
+        self._snav_cleanup(ex)
+
+    def SoarNavRTLHomeTerrainEvasion(self):
+        """Test RTL helper evades terrain and then resumes its Home route"""
+        ex = None
+        self._snav_common_start(params={
+            "SNAV_RADIUS_M": 0,
+            "SOAR_ALT_MIN": 20,
+            "SOAR_ALT_CUTOFF": 80,
+            "SOAR_ALT_MAX": 2000,
+            "SOAR_VSPEED": 20,
+            "RTL_RADIUS": 50,
+        })
+        try:
+            self.wait_ready_to_arm()
+            self.upload_rally_points_from_locations(self._snav_rally_square_locations(size_m=2000))
+            self._snav_start_active_navigation(timeout=60)
+            self.wait_distance_to_home(800, 2500, timeout=150)
+            self.context_clear_collection("STATUSTEXT")
+            self.change_mode("RTL")
+            self.wait_text("SoarNav: RTL Stall", timeout=60, check_context=True)
+            self.wait_mode("GUIDED", timeout=10)
+            self.context_clear_collection("STATUSTEXT")
+            self.set_parameters({"SNAV_DYN_SOALT": 3, "SNAV_TE_BUF_MIN": 220})
+            self.wait_text(r"SoarNav: .*\[Terrain Evasion\]", timeout=60, regex=True, check_context=True)
+            self.context_clear_collection("STATUSTEXT")
+            self.set_parameter("SNAV_TE_BUF_MIN", 10)
+            self.set_parameters({"SIM_WIND_SPD": 6, "SIM_WIND_DIR_Z": 90, "SIM_WIND_T": 1})
+            self.wait_altitude(300, 500, relative=True, timeout=120)
+            self.set_parameter("SIM_WIND_SPD", 0)
+            self.wait_text(r"SoarNav: .*\[RTL Home\]", timeout=120, regex=True, check_context=True)
+            self.wait_text("SoarNav: RTL Override: In home area. Resuming RTL.", timeout=240, check_context=True)
+            self.wait_mode("RTL", timeout=10)
         except Exception as e:  # noqa: BLE001
             self.print_exception_caught(e)
             ex = e
@@ -10841,6 +10923,8 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.SoarNavGlideConeMinOnly,
             self.SoarNavGlideConeTerrainEvasion,
             self.SoarNavRTLHome,
+            self.SoarNavRTLHomeThermal,
+            self.SoarNavRTLHomeTerrainEvasion,
             self.TerrainMission,
             self.TerrainMissionInterrupt,
             self.InertialLabsEAHRS,
