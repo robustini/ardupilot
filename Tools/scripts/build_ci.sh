@@ -192,6 +192,10 @@ for t in $CI_BUILD_TARGET; do
        run_autotest "Plane" "build.Plane" "test.PlaneTests1c"
         continue
     fi
+    if [ "$t" == "sitltest-soarnav" ]; then
+        run_autotest "SoarNav" "build.PlaneSoarNav" "test.PlaneSoarNav"
+        continue
+    fi
     if [ "$t" == "sitltest-quadplane-tests1a" ]; then
         run_autotest "QuadPlane" "build.Plane" "test.QuadPlaneTests1a"
         continue
@@ -496,10 +500,14 @@ for t in $CI_BUILD_TARGET; do
         continue
     fi
 
-    if [ "$t" == "clang_scan_build" ]; then
+    if [ "$t" == "clang_scan_build" ] || [ "$t" == "clang_scan_build_soarnav" ]; then
         unset BUILDROOT
         echo "Running SITL clang-scan-build test"
-        ./Tools/autotest/autotest.py clang-scan-build
+        if [ "$t" == "clang_scan_build_soarnav" ]; then
+            ./Tools/autotest/autotest.py --waf-configure-args="--enable-soarnav" clang-scan-build
+        else
+            ./Tools/autotest/autotest.py clang-scan-build
+        fi
         continue
     fi
 

@@ -110,6 +110,8 @@ def build_examples(**kwargs):
 
 def build_unit_tests(**kwargs):
     """Build tests."""
+    kwargs['extra_configure_args'] = list(kwargs.get('extra_configure_args', []))
+    kwargs['extra_configure_args'].append('--enable-soarnav')
     for target in ['linux', 'sitl']:
         print("Running build.unit_tests for %s" % target)
         try:
@@ -152,9 +154,9 @@ def run_unit_tests():
     return success
 
 
-def run_clang_scan_build():
+def run_clang_scan_build(extra_configure_args):
     """Run Clang Scan-build utility."""
-    if util.run_cmd("scan-build python3 waf configure",
+    if util.run_cmd(['scan-build', 'python3', 'waf', 'configure'] + extra_configure_args,
                     directory=util.reltopdir('.')) != 0:
         print("Failed scan-build-configure")
         return False
@@ -289,6 +291,7 @@ __bin_names = {
     "CopterTests2d": "arducopter",
 
     "Plane": "arduplane",
+    "PlaneSoarNav": "arduplane",
     "PlaneTests1a": "arduplane",
     "PlaneTests1b": "arduplane",
     "PlaneTests1c": "arduplane",
@@ -372,6 +375,7 @@ tester_class_map = {
     "test.CopterTests2c": arducopter.AutoTestCopterTests2c, # ~14m on CI
     "test.CopterTests2d": arducopter.AutoTestCopterTests2d, # ~14m on CI
     "test.Plane": arduplane.AutoTestPlane,
+    "test.PlaneSoarNav": arduplane.AutoTestPlaneSoarNav,
     "test.PlaneTests1a": arduplane.AutoTestPlaneTests1a, # ~12m on CI
     "test.PlaneTests1b": arduplane.AutoTestPlaneTests1b, # ~12m on CI
     "test.PlaneTests1c": arduplane.AutoTestPlaneTests1c, # ~12m on CI
@@ -457,8 +461,11 @@ def run_step(step):
 
     vehicle_binary = None
     board = "sitl"
-    if step == 'build.Plane':
+    if step in ('build.Plane', 'build.PlaneSoarNav'):
         vehicle_binary = 'bin/arduplane'
+        if step == 'build.PlaneSoarNav':
+            build_opts['extra_configure_args'] = list(build_opts['extra_configure_args'])
+            build_opts['extra_configure_args'].append('--enable-soarnav')
 
     if step == 'build.Rover':
         vehicle_binary = 'bin/ardurover'
@@ -596,7 +603,7 @@ def run_step(step):
         return run_unit_tests()
 
     if step == 'clang-scan-build':
-        return run_clang_scan_build()
+        return run_clang_scan_build(build_opts['extra_configure_args'])
 
     raise RuntimeError("Unknown step %s" % step)
 
@@ -813,7 +820,8 @@ def run_tests(steps):
     return passed
 
 
-vehicle_list = ['Sub', 'Copter', 'Plane', 'Tracker', 'Rover', 'QuadPlane', 'BalanceBot', 'Helicopter', 'Sailboat', 'Blimp']
+vehicle_list = ['Sub', 'Copter', 'Plane', 'Tracker', 'Rover', 'QuadPlane', 'BalanceBot', 'Helicopter', 'Sailboat', 'Blimp',
+                'PlaneSoarNav']
 
 
 def list_subtests():
@@ -1151,6 +1159,8 @@ if __name__ == "__main__":
         'build.Plane',
         'test.Plane',
         'test.QuadPlane',
+        'build.PlaneSoarNav',
+        'test.PlaneSoarNav',
 
         'build.Rover',
         'test.Rover',

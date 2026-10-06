@@ -435,12 +435,33 @@ TEST(AP_SoarNav, ThermalDensityDecaysWithAge)
 
 static void set_time_ms(uint32_t now_ms)
 {
-    hal.scheduler->stop_clock(uint64_t(now_ms) * 1000U);
+    static uint64_t offset_us = 0;
+    const uint64_t requested_us = uint64_t(now_ms) * 1000U;
+    const uint64_t current_us = AP_HAL::micros64();
+    if (offset_us + requested_us < current_us) {
+        offset_us = current_us;
+    }
+    hal.scheduler->stop_clock(offset_us + requested_us);
+}
+
+TEST(AP_SoarNav, TestClockPreservesElapsedTimeAcrossRestarts)
+{
+    set_time_ms(10000U);
+    const uint32_t first_ms = AP_HAL::millis();
+    set_time_ms(11000U);
+    const uint32_t advanced_ms = AP_HAL::millis();
+    EXPECT_EQ(advanced_ms - first_ms, 1000U);
+    set_time_ms(10000U);
+    const uint32_t restarted_ms = AP_HAL::millis();
+    EXPECT_GE(restarted_ms, advanced_ms);
+    set_time_ms(10100U);
+    EXPECT_EQ(AP_HAL::millis() - restarted_ms, 100U);
 }
 
 TEST(AP_SoarNav, HorizontalTargetRefreshPreservesWaypointClock)
 {
     set_time_ms(10000U);
+    const uint32_t start_ms = AP_HAL::millis();
     AP_SoarNav nav;
     AP_SoarNav_Test_Backend backend;
     AP_SoarNav_Test::configure(nav, backend);
@@ -450,7 +471,7 @@ TEST(AP_SoarNav, HorizontalTargetRefreshPreservesWaypointClock)
     set_time_ms(21000U);
     backend.current.alt -= 1000;
     ASSERT_TRUE(AP_SoarNav_Test::send_target(nav, backend, target, false));
-    EXPECT_EQ(AP_SoarNav_Test::waypoint_start(nav), 10000U);
+    EXPECT_EQ(AP_SoarNav_Test::waypoint_start(nav), start_ms);
     EXPECT_EQ(backend.target_count, 1U);
     set_time_ms(42000U);
     backend.current.alt -= 1000;
@@ -678,6 +699,7 @@ TEST(AP_SoarNav, GlideConeRestoresOnlyChangedLimits)
 TEST(AP_SoarNav, ThermalRefreshPreservesWaypointClock)
 {
     set_time_ms(10000U);
+    const uint32_t start_ms = AP_HAL::millis();
     AP_SoarNav nav;
     AP_SoarNav_Test_Backend backend;
     AP_SoarNav_Test::configure(nav, backend);
@@ -688,7 +710,7 @@ TEST(AP_SoarNav, ThermalRefreshPreservesWaypointClock)
     set_time_ms(15000U);
     ASSERT_TRUE(AP_SoarNav_Test::send_target(nav, backend, target, true));
     EXPECT_EQ(backend.target_count, 2U);
-    EXPECT_EQ(AP_SoarNav_Test::waypoint_start(nav), 10000U);
+    EXPECT_EQ(AP_SoarNav_Test::waypoint_start(nav), start_ms);
 }
 
 TEST(AP_SoarNav, ThermalExitInGuidedCanReengage)

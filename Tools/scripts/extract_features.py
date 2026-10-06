@@ -183,6 +183,7 @@ class ExtractFeatures(BuildScriptBase):
             ('AP_PLANE_GLIDER_PULLUP_ENABLED', 'GliderPullup::in_pullup',),
             ('QAUTOTUNE_ENABLED', 'ModeQAutotune::_enter',),
             ('HAL_SOARING_ENABLED', 'SoaringController::var_info',),
+            ('HAL_SOARNAV_ENABLED', 'AP_SoarNav::var_info',),
             ('HAL_LANDING_DEEPSTALL_ENABLED', r'AP_Landing_Deepstall::override_servos',),
 
             ('AP_GRIPPER_ENABLED', r'AP_Gripper::init\b',),

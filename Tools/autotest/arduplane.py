@@ -9179,11 +9179,10 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
         self.set_parameters(base_params)
 
     def _snav_rally_square_locations(self, size_m=650):
-        home = self.mav.location()
+        home = self.offset_location_up(self.home_position_as_location(), 100)
         ret = []
         for north, east in [(-size_m, -size_m), (-size_m, size_m), (size_m, size_m), (size_m, -size_m)]:
-            loc = mavutil.location(home.lat, home.lng, home.alt + 100, 0)
-            self.location_offset_ne(loc, north, east)
+            loc = self.offset_location_ne(home, north, east)
             ret.append(loc)
         return ret
 
@@ -10911,20 +10910,6 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             self.FRSkyPassThroughStatustext,
             self.LOITER,
             self.MAV_CMD_NAV_LOITER_TO_ALT,
-            self.SoarNavAutoStartDefault,
-            self.SoarNavSoaringSwitchHigh,
-            self.SoarNavEnableParam,
-            self.SoarNavRadiusNegative,
-            self.SoarNavRadiusArea,
-            self.SoarNavRallyPolygonArea,
-            self.SoarNavTerrainEvasion,
-            self.SoarNavTerrainEvasionHysteresis,
-            self.SoarNavGlideConeLinked,
-            self.SoarNavGlideConeMinOnly,
-            self.SoarNavGlideConeTerrainEvasion,
-            self.SoarNavRTLHome,
-            self.SoarNavRTLHomeThermal,
-            self.SoarNavRTLHomeTerrainEvasion,
             self.TerrainMission,
             self.TerrainMissionInterrupt,
             self.InertialLabsEAHRS,
@@ -11314,6 +11299,26 @@ class AutoTestPlane(vehicle_test_suite.TestSuite):
             # CI - which installs MAVProxy from git master - still runs it
             ret["MAVFTPCrcCompareMAVProxy"] = "needs a MAVProxy which has the ftp crclocal and crccmp commands; see https://github.com/ArduPilot/MAVProxy"  # noqa:E501
         return ret
+
+
+class AutoTestPlaneSoarNav(AutoTestPlane):
+    def tests(self):
+        return [
+            self.SoarNavAutoStartDefault,
+            self.SoarNavSoaringSwitchHigh,
+            self.SoarNavEnableParam,
+            self.SoarNavRadiusNegative,
+            self.SoarNavRadiusArea,
+            self.SoarNavRallyPolygonArea,
+            self.SoarNavTerrainEvasion,
+            self.SoarNavTerrainEvasionHysteresis,
+            self.SoarNavGlideConeLinked,
+            self.SoarNavGlideConeMinOnly,
+            self.SoarNavGlideConeTerrainEvasion,
+            self.SoarNavRTLHome,
+            self.SoarNavRTLHomeThermal,
+            self.SoarNavRTLHomeTerrainEvasion,
+        ]
 
 
 class AutoTestPlaneTests1a(AutoTestPlane):

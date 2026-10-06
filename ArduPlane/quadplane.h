@@ -1,8 +1,12 @@
 #pragma once
 
 #include <AP_HAL/AP_HAL_Boards.h>
+#include <AP_SoarNav/AP_SoarNav_config.h>
 
-#ifndef HAL_QUADPLANE_ENABLED
+#if HAL_SOARNAV_ENABLED
+#undef HAL_QUADPLANE_ENABLED
+#define HAL_QUADPLANE_ENABLED 0
+#elif !defined(HAL_QUADPLANE_ENABLED)
 #define HAL_QUADPLANE_ENABLED 1
 #endif
 

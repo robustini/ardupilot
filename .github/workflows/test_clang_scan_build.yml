@@ -149,6 +149,8 @@ jobs:
       options: --privileged --cap-add=SYS_PTRACE --security-opt apparmor=unconfined --security-opt seccomp=unconfined
     strategy:
       fail-fast: false  # don't cancel if a job from the matrix fails (get archives!)
+      matrix:
+        config: [clang_scan_build, clang_scan_build_soarnav]
     steps:
       # git checkout the PR
       - uses: actions/checkout@v7
@@ -157,7 +159,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-ccache
         with:
-          key-suffix: base
+          key-suffix: ${{ matrix.config }}
       - name: Install MAVProxy
         run: |
           # Install this specific version just to prevent rolling updates.
@@ -179,7 +181,7 @@ jobs:
           sudo apt-get -y install clang-tools
           export PATH="/github/home/.local/bin:$PATH"
           mkdir -p "$GITHUB_WORKSPACE/tmp"
-          CI_BUILD_TARGET="clang_scan_build" Tools/scripts/build_ci.sh  >$HOME/scan-build-stdout.txt
+          CI_BUILD_TARGET="${{ matrix.config }}" Tools/scripts/build_ci.sh  >$HOME/scan-build-stdout.txt
 
           ccache -s
           ccache -z
@@ -188,7 +190,7 @@ jobs:
       # leaves a warm cache for the next run
       - uses: ./.github/actions/save-ccache
         with:
-          key-suffix: base
+          key-suffix: ${{ matrix.config }}
 
       - name: check clang-scan-build findings
         shell: bash
@@ -201,6 +203,6 @@ jobs:
         uses: actions/upload-artifact@v7
         if: always()
         with:
-           name: clang-scan-build
+           name: ${{ matrix.config }}
            path: ${{ github.workspace }}/tmp/scan-build
            retention-days: 7

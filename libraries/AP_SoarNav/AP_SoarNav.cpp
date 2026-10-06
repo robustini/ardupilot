@@ -1550,7 +1550,7 @@ void AP_SoarNav::_set_state(State state, Backend &backend, const char *reason)
     _last_announced_state = state;
     const char *name = "IDLE";
     switch (state) {
-    case State::IDLE: name = "IDLE"; break;
+    case State::IDLE: break;
     case State::WAITING_FOR_ACTIVATION: name = "WAITING"; break;
     case State::NAVIGATING: name = "NAV"; break;
     case State::PILOT_OVERRIDE: name = "PILOT"; break;
@@ -3081,7 +3081,6 @@ bool AP_SoarNav::_select_grid_target(Backend &backend, const Location &loc, Loca
             _grid[_valid_cells[i]].visits = 0;
         }
         least_count = 0;
-        min_visits = 0;
         for (uint8_t i = 0; i < _valid_cell_count; i++) {
             const uint8_t idx = _valid_cells[i];
             if (have_cur_idx && idx == cur_idx && _valid_cell_count > 1) {
